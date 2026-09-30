@@ -52,35 +52,35 @@ BODY=$(cat <<EOF
     "desiredCount": ${CONTROL_PLANE_DESIRED_COUNT},
     "systemReservedMemory": "1Gi",
     "infra": {
-        "machineTemplate": {
-          "apiVersion": "infrastructure.cluster.x-k8s.io/v1alpha1",
-          "kind": "NicoMachineTemplate",
-          "metadata": {
-            "name": "${CLUSTER_NAME}-control-plane-template"
-          },
-          "spec": {
-            "template": {
-              "spec": {
-                "vpcID": "${NICO_VPC_ID}",
-                "instanceTypeID": "${NICO_INSTANCE_TYPE_ID}",
-                "cloudInitInjectHostname": true,
-                "ipxeScript": "#!ipxe\\necho local-nico-control-plane\\n",
-                "sshKeyGroupIDs": [
-                  "${NICO_SSH_KEY_GROUP_ID}"
-                ],
-                "interfaces": [
-                  {
-                    "subnetID": "${NICO_SUBNET_ID}"
-                  }
-                ]
-              }
+      "machineTemplate": {
+        "apiVersion": "infrastructure.cluster.x-k8s.io/v1alpha1",
+        "kind": "NicoMachineTemplate",
+        "metadata": {
+          "name": "${CLUSTER_NAME}-control-plane-template"
+        },
+        "spec": {
+          "template": {
+            "spec": {
+              "vpcID": "${NICO_VPC_ID}",
+              "instanceTypeID": "${NICO_INSTANCE_TYPE_ID}",
+              "cloudInitInjectHostname": true,
+              "ipxeScript": "#!ipxe\\necho local-nico-control-plane\\n",
+              "sshKeyGroupIDs": [
+                "${NICO_SSH_KEY_GROUP_ID}"
+              ],
+              "interfaces": [
+                {
+                  "subnetID": "${NICO_SUBNET_ID}"
+                }
+              ]
             }
           }
-        },
-        "preKubeadmCommands": [
-          "mkdir -p /run/cluster-api",
-          "echo success > /run/cluster-api/bootstrap-success.complete"
-        ]
+        }
+      },
+      "preKubeadmCommands": [
+        "mkdir -p /run/cluster-api",
+        "echo success > /run/cluster-api/bootstrap-success.complete"
+      ]
     }
   },
   "nodePools": [
