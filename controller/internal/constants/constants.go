@@ -95,15 +95,6 @@ const (
 	// Secrets and OIDC-mode CAPI objects. The Helm chart creates it unconditionally.
 	NamespaceNKESystem = "nke-system"
 
-	// LabelKeyKubeconfigMode records whether a published kubeconfig Secret holds
-	// SPIRE exec-auth or a verbatim admin.conf. The mode is rewritten in place when
-	// EnableOIDC flips a cluster, so it is descriptive, not an ownership key:
-	// publish and delete key off cluster-id alone, and the consume path checks the
-	// payload itself rather than this label.
-	LabelKeyKubeconfigMode        = "nke.nvidia.com/kubeconfig-mode"
-	LabelValueKubeconfigModeSPIRE = "spire"
-	LabelValueKubeconfigModeAdmin = "admin"
-
 	// NKE Field Managers for server-side apply. This controller's own three
 	// (config.Config.FieldManagerName, FieldManagerRebootMachineName,
 	// FieldManagerMachineHealthIssueName) are per-install configurable, not
@@ -138,8 +129,13 @@ const (
 	DSXIMDSSpireAgentPath            = "/spire/agent/dsx_imds/tenant/"
 	JoinTokenAlternateSpireAgentPath = "/join-token-spire-agent/host-id/" //nolint:gosec // This is a SPIFFE path prefix, not a credential.
 
-	CAPISpireAgentConfigPath = "/etc/spire-agent/agent.conf"
-	CAPISpireTrustBundlePath = "/etc/spire-agent/initial-trust-bundle.pem"
+	CAPISpireAgentConfigPath       = "/etc/spire-agent/agent.conf"
+	CAPISpireExecPluginCommand     = "/opt/spiffe/bin/k8s-spiffe-workload-jwt-exec-auth"
+	CAPISpireTrustBundlePath       = "/etc/spire-agent/initial-trust-bundle.pem"
+	CAPISpireTrustBundleObjectName = "spire-agent-initial-trust-bundle"
+	CAPISpireTrustBundleSecretKey  = "bundle.pem"
+	CAPIWorkerJoinSpiffeHint       = "kubeadm-join"
+	CAPIWorkerJoinSpiffeSelector   = "unix:path:" + CAPISpireExecPluginCommand
 )
 
 type RebootStatus string

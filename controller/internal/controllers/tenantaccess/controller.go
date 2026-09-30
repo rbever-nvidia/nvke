@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/dsx-ai-factory/nke/controller/internal/agent"
-	"github.com/dsx-ai-factory/nke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile/dbwrapper"
@@ -225,39 +224,33 @@ func (c *Controller) publish(ctx context.Context, cluster db.Cluster, adminConf 
 		return err
 	}
 
-	if err := c.upsertKubeconfigSecret(ctx, live, AdminKubeconfigSecretName(live.Name), adminConf, constants.LabelValueKubeconfigModeAdmin); err != nil {
+	if err := c.upsertKubeconfigSecret(ctx, live, AdminKubeconfigSecretName(live.Name), adminConf); err != nil {
 		return err
 	}
 
 	if live.OIDCAuthEnabled {
-		return c.publishSPIRE(ctx, live, adminConf)
+		err = c.publishSPIRE(ctx, live, adminConf)
+	} else {
+		err = c.upsertKubeconfigSecret(ctx, live, KubeconfigSecretName(live.Name), adminConf)
+	}
+	if err != nil {
+		return err
 	}
 
-	return c.upsertKubeconfigSecret(ctx, live, KubeconfigSecretName(live.Name), adminConf, constants.LabelValueKubeconfigModeAdmin)
+	// Ordered last because a valid Cluster.spec.controlPlaneEndpoint is what makes CAPI's own reconcileKubeconfig
+	// reachable, and that path mints <cluster>-kubeconfig by signing with a CA private key NKE does not hold.
+	// It only acts when the Secret is absent, so the endpoint is applied only after the kubeconfig Secret exists.
+	err = c.publishCAPIBootstrapContract(ctx, live, adminConf)
+	if err != nil {
+		return fmt.Errorf("publishing CAPI bootstrap contract for cluster %s: %w", live.Name, err)
+	}
+
+	return nil
 }
 
 // upsertKubeconfigSecret upserts one Opaque kubeconfig Secret in SecretsNamespace.
-//
-// Opaque, not clusterv1.ClusterSecretType: nothing reads the type — CAPI resolves
-// a kubeconfig by name and data key — and Opaque is CAPI's marker for a Secret
-// its core components did not create, which is what a TenantAccess-published
-// kubeconfig is. It also matches what the retired SWE controller left on the
-// fleet, so taking those Secrets over is an in-place update rather than a
-// collision on an immutable field.
-func (c *Controller) upsertKubeconfigSecret(ctx context.Context, cluster db.Cluster, name string, kubeconfig []byte, mode string) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: SecretsNamespace,
-			Labels: map[string]string{
-				clusterv1.ClusterNameLabel: cluster.Name,
-			},
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{KubeconfigSecretKey: kubeconfig},
-	}
-	capi.SetSecretOwnership(secret, cluster, mode, c.cfg.ManagedByLabelValue)
-	return c.upsertSecret(ctx, cluster, secret)
+func (c *Controller) upsertKubeconfigSecret(ctx context.Context, cluster db.Cluster, name string, kubeconfig []byte) error {
+	return c.upsertCAPISecret(ctx, cluster, name, map[string][]byte{KubeconfigSecretKey: kubeconfig})
 }
 
 // refreshCluster returns the live DB row. skip means do not publish because the
@@ -306,7 +299,7 @@ func (c *Controller) publishSPIRE(ctx context.Context, cluster db.Cluster, admin
 		return fmt.Errorf("building SPIRE kubeconfig for cluster %s: %w", cluster.Name, err)
 	}
 
-	if err := c.upsertKubeconfigSecret(ctx, cluster, KubeconfigSecretName(cluster.Name), kubeconfig, constants.LabelValueKubeconfigModeSPIRE); err != nil {
+	if err := c.upsertKubeconfigSecret(ctx, cluster, KubeconfigSecretName(cluster.Name), kubeconfig); err != nil {
 		return err
 	}
 
@@ -318,7 +311,6 @@ func (c *Controller) publishSPIRE(ctx context.Context, cluster db.Cluster, admin
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{TrustBundleSecretKey: ca},
 	}
-	capi.SetSecretOwnership(trustBundleSecret, cluster, constants.LabelValueKubeconfigModeSPIRE, c.cfg.ManagedByLabelValue)
 	return c.upsertSecret(ctx, cluster, trustBundleSecret)
 }
 

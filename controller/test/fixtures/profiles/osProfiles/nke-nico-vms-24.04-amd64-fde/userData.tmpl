@@ -65,9 +65,17 @@ write_files:
           }
 
           WorkloadAttestor "unix" {
-              plugin_data {}
+              plugin_data {
+                  discover_workload_path = true
+              }
           }
       }
+  - path: /etc/systemd/system/spire-agent.service.d/path-discovery.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Service]
+      AmbientCapabilities=CAP_SYS_PTRACE
   - path: /etc/spire-agent/initial-trust-bundle.pem
     owner: root:root
     permissions: '0644'
@@ -96,6 +104,7 @@ runcmd:
 {{- end }}
   - DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=600 nke-agent nke-kubeadm-distro-{{ trimPrefix .KubernetesVersion "v" }} spire-agent
   - [sh, -c, 'u=http://carbide-pxe.forge:18080/files/node-agent/nke-agent; if curl -fsSL "$u" -o /tmp/nke-agent; then install -m 0755 /tmp/nke-agent /usr/local/bin/nke-agent && echo "downloaded local nke-agent" && /usr/local/bin/nke-agent -version; else echo "local nke-agent not available at $u; using image agent"; fi']
+  - [sh, -c, 'mkdir -p /opt/spiffe/bin; u=http://carbide-pxe.forge:18080/files/spiffe/k8s-spiffe-workload-jwt-exec-auth; if curl -fsSL "$u" -o /tmp/k8s-spiffe-workload-jwt-exec-auth; then install -m 0755 /tmp/k8s-spiffe-workload-jwt-exec-auth /opt/spiffe/bin/k8s-spiffe-workload-jwt-exec-auth && echo "downloaded SPIFFE JWT exec plugin"; else echo "SPIFFE JWT exec plugin not available at $u" >&2; fi']
 {{- if .CalicoEnabled }}
   - DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=600 nke-cni-calico-images-3.30.1 nke-cni-calico-manifests-3.30.1
 {{- end }}

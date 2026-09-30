@@ -143,7 +143,9 @@ data:
         verbs: ["update"]
       - apiGroups: ["certificates.k8s.io"]
         resources: ["signers"]
-        resourceNames: ["kubernetes.io/kubelet-serving"]
+        resourceNames:
+          - "kubernetes.io/kubelet-serving"
+          - "kubernetes.io/kube-apiserver-client-kubelet"
         verbs: ["approve"]
     ---
     apiVersion: rbac.authorization.k8s.io/v1
@@ -222,6 +224,60 @@ data:
     roleRef:
       kind: Role
       name: {{ $tenantRbacName }}
+      apiGroup: rbac.authorization.k8s.io
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: nke:node-bootstrapper
+    subjects:
+      - kind: Group
+        name: nke:node-bootstrapper
+        apiGroup: rbac.authorization.k8s.io
+    roleRef:
+      kind: ClusterRole
+      name: system:node-bootstrapper
+      apiGroup: rbac.authorization.k8s.io
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: nke:node-bootstrapper:get-nodes
+    subjects:
+      - kind: Group
+        name: nke:node-bootstrapper
+        apiGroup: rbac.authorization.k8s.io
+    roleRef:
+      kind: ClusterRole
+      name: kubeadm:get-nodes
+      apiGroup: rbac.authorization.k8s.io
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: nke:node-bootstrapper:kubelet-config
+      namespace: kube-system
+    subjects:
+      - kind: Group
+        name: nke:node-bootstrapper
+        apiGroup: rbac.authorization.k8s.io
+    roleRef:
+      kind: Role
+      name: kubeadm:kubelet-config
+      apiGroup: rbac.authorization.k8s.io
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: nke:node-bootstrapper:nodes-kubeadm-config
+      namespace: kube-system
+    subjects:
+      - kind: Group
+        name: nke:node-bootstrapper
+        apiGroup: rbac.authorization.k8s.io
+    roleRef:
+      kind: Role
+      name: kubeadm:nodes-kubeadm-config
       apiGroup: rbac.authorization.k8s.io
     ---
     apiVersion: rbac.authorization.k8s.io/v1

@@ -94,6 +94,63 @@ func TestMachineSpireEntryControllerReconcileCreatesClusterStaticEntry(t *testin
 	}
 }
 
+func TestMachineSpireEntryControllerReconcileCreatesEntriesForCAPIWorker(t *testing.T) {
+	machineUID := types.UID("machine-uid")
+	scheme := runtime.NewScheme()
+	require.NoError(t, clusterv1.AddToScheme(scheme))
+	require.NoError(t, spirev1alpha1.AddToScheme(scheme))
+
+	machineSet := &clusterv1.MachineSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-ms",
+			Namespace: "nke-system",
+		},
+	}
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-0",
+			Namespace: "nke-system",
+			UID:       machineUID,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel: "cluster-test",
+			},
+			Annotations: map[string]string{
+				constants.MachineAnnotationKeySpireAgentSpiffeIDPath: "/spire/agent/tpm/test-hash",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: clusterv1.GroupVersion.String(),
+				Kind:       "MachineSet",
+				Name:       machineSet.Name,
+			}},
+		},
+	}
+
+	controller := &MachineSpireEntryController{
+		cfg:         config.Config{SpireClassName: "spire"},
+		k8sClient:   fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSet, machine).Build(),
+		logger:      slog.New(slog.DiscardHandler),
+		trustDomain: "example.org",
+	}
+
+	_, err := controller.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{
+		Namespace: machine.Namespace,
+		Name:      machine.Name,
+	}})
+	require.NoError(t, err)
+
+	hostEntry := &spirev1alpha1.ClusterStaticEntry{}
+	require.NoError(t, controller.k8sClient.Get(context.Background(), types.NamespacedName{
+		Name: machineSpireEntryName(string(machineUID)),
+	}, hostEntry))
+	require.Equal(t, "spiffe://example.org/host/"+string(machineUID), hostEntry.Spec.SPIFFEID)
+
+	joinEntry := &spirev1alpha1.ClusterStaticEntry{}
+	require.NoError(t, controller.k8sClient.Get(context.Background(), types.NamespacedName{
+		Name: machineJoinSpireEntryName(string(machineUID)),
+	}, joinEntry))
+	require.Equal(t, "spiffe://example.org/kubeadm/join/"+string(machineUID), joinEntry.Spec.SPIFFEID)
+}
+
 func TestMachineSpireEntryControllerReconcileDeletesClusterStaticEntryWhenMachineDeleting(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, clusterv1.AddToScheme(scheme))

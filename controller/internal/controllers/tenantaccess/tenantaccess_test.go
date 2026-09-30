@@ -31,13 +31,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capisecret "sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/dsx-ai-factory/nke/controller/internal/agent"
 	"github.com/dsx-ai-factory/nke/controller/internal/agent/agenttest"
-	"github.com/dsx-ai-factory/nke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile/dbwrapper"
@@ -202,9 +202,8 @@ func TestController_Reconcile(t *testing.T) {
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(activeCluster.Name)).Return([]db.Cluster{activeCluster}, nil).Once()
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(deletingCluster.Name)).Return([]db.Cluster{deletingCluster}, nil).Once()
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(notReadyCluster.Name)).Return([]db.Cluster{notReadyCluster}, nil).Once()
-	// Active is read by the mode refresh, admin Secret upsert, and CWE kubeconfig
-	// Secret upsert.
-	mockDB.On("GetCluster", mock.Anything, activeCluster.ID).Return(activeCluster, nil).Times(3)
+	// Active is read by mode selection, both kubeconfig writes, and the CA Secret write.
+	mockDB.On("GetCluster", mock.Anything, activeCluster.ID).Return(activeCluster, nil).Times(4)
 	mockDB.On("ListNodes", mock.Anything, mock.MatchedBy(func(f db.NodeFilters) bool {
 		return f.ClusterID != nil && *f.ClusterID == activeCluster.ID
 	})).Return([]db.Node{joinedCPNode(activeNodeID, activeCluster.ID)}, nil)
@@ -215,7 +214,7 @@ func TestController_Reconcile(t *testing.T) {
 
 	nodeAgentClient := &agenttest.FakeClient{
 		Kubeconfigs: map[uuid.UUID]string{
-			activeNodeID: testKubeconfig,
+			activeNodeID: testAdminConf,
 		},
 	}
 
@@ -246,7 +245,7 @@ func TestController_Reconcile(t *testing.T) {
 	require.NoError(t, err)
 
 	// The non-OIDC cluster publishes the admin kubeconfig verbatim.
-	assertSecret(t, ctx, k8sClient, activeCluster, true)
+	assertKubeconfigSecret(t, ctx, k8sClient, activeCluster)
 	// Deleting clusters preserve existing access material for Kubernetes GC to
 	// remove once the CAPI Cluster finishes deleting, while not-ready clusters
 	// publish nothing.
@@ -260,7 +259,7 @@ func TestController_Reconcile(t *testing.T) {
 		Name: TrustBundleSecretName(deletingCluster.Name), Namespace: SecretsNamespace,
 	}, preservedTrustBundle))
 	assert.Equal(t, []byte("existing-trust-bundle"), preservedTrustBundle.Data[TrustBundleSecretKey])
-	assertSecret(t, ctx, k8sClient, notReadyCluster, false)
+	assertNoSecrets(t, ctx, k8sClient, notReadyCluster)
 	assert.Equal(t, []uuid.UUID{deletingCluster.ID}, tenantManagers.removed)
 
 	mockDB.AssertExpectations(t)
@@ -285,7 +284,7 @@ func TestController_ReconcileNoCAPICluster(t *testing.T) {
 	_, err := c.Reconcile(ctx, reconcileRequest(cluster.Name))
 	require.NoError(t, err)
 
-	assertSecret(t, ctx, k8sClient, cluster, false)
+	assertNoSecrets(t, ctx, k8sClient, cluster)
 	mockDB.AssertNotCalled(t, "ListClusters", mock.Anything, mock.Anything)
 }
 
@@ -425,9 +424,9 @@ func TestController_ReconcileOIDC(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(oidcCluster.Name)).Return([]db.Cluster{oidcCluster}, nil).Once()
-	// The mode refresh, admin Secret upsert, SPIRE kubeconfig upsert, and
-	// trust-bundle upsert each re-read the row.
-	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(4)
+	// The mode refresh, admin Secret upsert, SPIRE kubeconfig upsert, trust-bundle
+	// upsert, and CA Secret upsert each re-read the row.
+	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.MatchedBy(func(f db.NodeFilters) bool {
 		return f.ClusterID != nil && *f.ClusterID == oidcID
 	})).Return([]db.Node{joinedCPNode(oidcNodeID, oidcID)}, nil)
@@ -504,12 +503,11 @@ func TestController_ReconcileOIDC(t *testing.T) {
 	assert.Equal(t, []byte("test-ca"), tbSecret.Data[TrustBundleSecretKey])
 	assert.Equal(t, "cloud-workflow-engine", tbSecret.Labels[constants.LabelKeyNkeManagedBy])
 	assert.Equal(t, oidcCluster.ID.String(), tbSecret.Labels[constants.LabelKeyClusterID])
-	assert.Equal(t, constants.LabelValueKubeconfigModeSPIRE, kcSecret.Labels[constants.LabelKeyKubeconfigMode])
 	assert.Equal(t, corev1.SecretTypeOpaque, kcSecret.Type)
 	assertOwnedByCAPICluster(t, tbSecret, oidcCluster)
 
 	// Always-admin Secret carries verbatim admin.conf even when OIDC is on.
-	assertAdminSecret(t, ctx, k8sClient, oidcCluster, testAdminConf)
+	assertAdminSecret(t, ctx, k8sClient, oidcCluster)
 
 	mockDB.AssertExpectations(t)
 }
@@ -528,8 +526,8 @@ func TestController_ReconcileMixed(t *testing.T) {
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(plainCluster.Name)).Return([]db.Cluster{plainCluster}, nil).Once()
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(oidcCluster.Name)).Return([]db.Cluster{oidcCluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, plainID).Return(plainCluster, nil).Times(3)
-	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(4)
+	mockDB.On("GetCluster", mock.Anything, plainID).Return(plainCluster, nil).Times(4)
+	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.MatchedBy(func(f db.NodeFilters) bool {
 		return f.ClusterID != nil && *f.ClusterID == plainID
 	})).Return([]db.Node{joinedCPNode(plainNodeID, plainID)}, nil)
@@ -539,7 +537,7 @@ func TestController_ReconcileMixed(t *testing.T) {
 
 	nodeAgentClient := &agenttest.FakeClient{
 		Kubeconfigs: map[uuid.UUID]string{
-			plainNodeID: testKubeconfig,
+			plainNodeID: testAdminConf,
 			oidcNodeID:  testAdminConf,
 		},
 	}
@@ -568,7 +566,7 @@ func TestController_ReconcileMixed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Non-OIDC cluster: verbatim admin kubeconfig published.
-	assertSecret(t, ctx, k8sClient, plainCluster, true)
+	assertKubeconfigSecret(t, ctx, k8sClient, plainCluster)
 
 	// OIDC cluster (same Reconcile pass): RBAC applied into the tenant, and the
 	// SPIRE exec-auth kubeconfig + trust-bundle Secrets published.
@@ -592,7 +590,7 @@ func TestController_ReconcileMixed(t *testing.T) {
 	}, tbSecret))
 	assert.Equal(t, []byte("test-ca"), tbSecret.Data[TrustBundleSecretKey])
 
-	assertAdminSecret(t, ctx, k8sClient, oidcCluster, testAdminConf)
+	assertAdminSecret(t, ctx, k8sClient, oidcCluster)
 
 	mockDB.AssertExpectations(t)
 }
@@ -613,7 +611,7 @@ func joinedCPNode(nodeID, clusterID uuid.UUID) db.Node {
 
 // capiClusterFixture is the CAPI Cluster object a fake k8s client must contain
 // for the controller to publish anything for cluster: existence of this object
-// is the reconcile gate, and published Secrets carry an owner reference to it.
+// is the reconcile gate.
 func capiClusterFixture(cluster db.Cluster) *clusterv1.Cluster {
 	return &clusterv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
@@ -638,7 +636,7 @@ func clusterNameFilter(name string) any {
 	})
 }
 
-func assertSecret(t *testing.T, ctx context.Context, k8sClient ctrlclient.Client, cluster db.Cluster, want bool) {
+func assertNoSecrets(t *testing.T, ctx context.Context, k8sClient ctrlclient.Client, cluster db.Cluster) {
 	t.Helper()
 
 	secret := &corev1.Secret{}
@@ -646,29 +644,38 @@ func assertSecret(t *testing.T, ctx context.Context, k8sClient ctrlclient.Client
 		Name:      KubeconfigSecretName(cluster.Name),
 		Namespace: SecretsNamespace,
 	}, secret)
-	if !want {
-		assert.True(t, apierrors.IsNotFound(err), "expected no secret for cluster %s", cluster.Name)
-		adminErr := k8sClient.Get(ctx, types.NamespacedName{
-			Name:      AdminKubeconfigSecretName(cluster.Name),
-			Namespace: SecretsNamespace,
-		}, &corev1.Secret{})
-		assert.True(t, apierrors.IsNotFound(adminErr), "expected no admin secret for cluster %s", cluster.Name)
-		return
-	}
+	assert.True(t, apierrors.IsNotFound(err), "expected no secret for cluster %s", cluster.Name)
+	adminErr := k8sClient.Get(ctx, types.NamespacedName{
+		Name:      AdminKubeconfigSecretName(cluster.Name),
+		Namespace: SecretsNamespace,
+	}, &corev1.Secret{})
+	assert.True(t, apierrors.IsNotFound(adminErr), "expected no admin secret for cluster %s", cluster.Name)
+}
 
-	require.NoError(t, err)
-	assert.Equal(t, []byte(testKubeconfig), secret.Data[KubeconfigSecretKey])
+func assertKubeconfigSecret(t *testing.T, ctx context.Context, k8sClient ctrlclient.Client, cluster db.Cluster) {
+	t.Helper()
+
+	secret := &corev1.Secret{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+		Name:      KubeconfigSecretName(cluster.Name),
+		Namespace: SecretsNamespace,
+	}, secret))
+	assertKubeconfigSecretObject(t, secret, cluster, testAdminConf)
+	assertAdminSecret(t, ctx, k8sClient, cluster)
+}
+
+func assertKubeconfigSecretObject(t *testing.T, secret *corev1.Secret, cluster db.Cluster, wantKubeconfig string) {
+	t.Helper()
+
+	assert.Equal(t, []byte(wantKubeconfig), secret.Data[KubeconfigSecretKey])
 	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
 	assert.Equal(t, cluster.Name, secret.Labels[clusterv1.ClusterNameLabel])
 	assert.Equal(t, "cloud-workflow-engine", secret.Labels[constants.LabelKeyNkeManagedBy])
 	assert.Equal(t, cluster.ID.String(), secret.Labels[constants.LabelKeyClusterID])
-	assert.Equal(t, constants.LabelValueKubeconfigModeAdmin, secret.Labels[constants.LabelKeyKubeconfigMode])
 	assertOwnedByCAPICluster(t, secret, cluster)
-
-	assertAdminSecret(t, ctx, k8sClient, cluster, testKubeconfig)
 }
 
-func assertAdminSecret(t *testing.T, ctx context.Context, k8sClient ctrlclient.Client, cluster db.Cluster, wantKubeconfig string) {
+func assertAdminSecret(t *testing.T, ctx context.Context, k8sClient ctrlclient.Client, cluster db.Cluster) {
 	t.Helper()
 
 	secret := &corev1.Secret{}
@@ -676,18 +683,14 @@ func assertAdminSecret(t *testing.T, ctx context.Context, k8sClient ctrlclient.C
 		Name:      AdminKubeconfigSecretName(cluster.Name),
 		Namespace: SecretsNamespace,
 	}, secret))
-	assert.Equal(t, []byte(wantKubeconfig), secret.Data[KubeconfigSecretKey])
+	assert.Equal(t, []byte(testAdminConf), secret.Data[KubeconfigSecretKey])
 	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
 	assert.Equal(t, cluster.Name, secret.Labels[clusterv1.ClusterNameLabel])
 	assert.Equal(t, "cloud-workflow-engine", secret.Labels[constants.LabelKeyNkeManagedBy])
 	assert.Equal(t, cluster.ID.String(), secret.Labels[constants.LabelKeyClusterID])
-	assert.Equal(t, constants.LabelValueKubeconfigModeAdmin, secret.Labels[constants.LabelKeyKubeconfigMode])
 	assertOwnedByCAPICluster(t, secret, cluster)
 }
 
-// assertOwnedByCAPICluster checks the Secret carries a controller owner
-// reference to the CAPI Cluster this cluster's tenant-access fixtures publish
-// against, so Kubernetes GC removes it when that Cluster is deleted.
 func assertOwnedByCAPICluster(t *testing.T, secret *corev1.Secret, cluster db.Cluster) {
 	t.Helper()
 
@@ -699,6 +702,8 @@ func assertOwnedByCAPICluster(t *testing.T, secret *corev1.Secret, cluster db.Cl
 	assert.Equal(t, types.UID(cluster.ID.String()), owner.UID)
 	require.NotNil(t, owner.Controller)
 	assert.True(t, *owner.Controller)
+	require.NotNil(t, owner.BlockOwnerDeletion)
+	assert.True(t, *owner.BlockOwnerDeletion)
 }
 
 type recordingTenantManagerSet struct {
@@ -775,7 +780,7 @@ func TestController_SkipsPublishWhenClusterStartsDeletingMidPass(t *testing.T) {
 	_, err := c.Reconcile(ctx, reconcileRequest(snapshot.Name))
 	require.NoError(t, err)
 
-	assertSecret(t, ctx, k8sClient, snapshot, false)
+	assertNoSecrets(t, ctx, k8sClient, snapshot)
 }
 
 // Same window, one step further along: teardown has already deleted the row.
@@ -800,7 +805,7 @@ func TestController_SkipsPublishWhenClusterRowIsGone(t *testing.T) {
 	// A vanished cluster is a normal outcome of the teardown race, not an error.
 	_, err := c.Reconcile(ctx, reconcileRequest(snapshot.Name))
 	require.NoError(t, err)
-	assertSecret(t, ctx, k8sClient, snapshot, false)
+	assertNoSecrets(t, ctx, k8sClient, snapshot)
 }
 
 // Each control-plane node has its own admin.conf, and ListNodes has no ORDER BY,
@@ -852,7 +857,7 @@ func TestController_PublishesOIDCWhenTenantAccessDisabled(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(oidcCluster.Name)).Return([]db.Cluster{oidcCluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(4)
+	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(6)
 	mockDB.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{joinedCPNode(oidcNodeID, oidcID)}, nil)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(nkeRBACConfigMap(), capiClusterFixture(oidcCluster)).Build()
@@ -873,8 +878,7 @@ func TestController_PublishesOIDCWhenTenantAccessDisabled(t *testing.T) {
 		Name:      KubeconfigSecretName(oidcCluster.Name),
 		Namespace: SecretsNamespace,
 	}, kcSecret))
-	assert.Equal(t, constants.LabelValueKubeconfigModeSPIRE, kcSecret.Labels[constants.LabelKeyKubeconfigMode])
-	assertAdminSecret(t, ctx, k8sClient, oidcCluster, testAdminConf)
+	assertAdminSecret(t, ctx, k8sClient, oidcCluster)
 }
 
 func TestController_PublishesAdminWhenTenantAccessDisabled(t *testing.T) {
@@ -884,7 +888,7 @@ func TestController_PublishesAdminWhenTenantAccessDisabled(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(cluster.Name)).Return([]db.Cluster{cluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(3)
+	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{joinedCPNode(nodeID, clusterID)}, nil)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
@@ -892,14 +896,14 @@ func TestController_PublishesAdminWhenTenantAccessDisabled(t *testing.T) {
 		config.Config{TenantAccessEnabled: false},
 		mockDB,
 		k8sClient,
-		&agenttest.FakeClient{Kubeconfigs: map[uuid.UUID]string{nodeID: testKubeconfig}},
+		&agenttest.FakeClient{Kubeconfigs: map[uuid.UUID]string{nodeID: testAdminConf}},
 	)
 	_, err := c.Reconcile(ctx, reconcileRequest(cluster.Name))
 	require.NoError(t, err)
-	assertSecret(t, ctx, k8sClient, cluster, true)
+	assertKubeconfigSecret(t, ctx, k8sClient, cluster)
 }
 
-func TestPublish_RefusesWrongOwnerSecret(t *testing.T) {
+func TestPublish_ReplacesStaleKubeconfigSecret(t *testing.T) {
 	ctx := context.Background()
 	cluster := db.Cluster{ID: uuid.New(), Name: "oidc", OIDCAuthEnabled: true}
 	otherID := uuid.New()
@@ -909,10 +913,11 @@ func TestPublish_RefusesWrongOwnerSecret(t *testing.T) {
 			Name:      KubeconfigSecretName(cluster.Name),
 			Namespace: SecretsNamespace,
 			Labels: map[string]string{
-				constants.LabelKeyClusterID:      otherID.String(),
-				constants.LabelKeyKubeconfigMode: constants.LabelValueKubeconfigModeSPIRE,
+				constants.LabelKeyClusterID: otherID.String(),
 			},
 		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{KubeconfigSecretKey: []byte("old")},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(existing, nkeRBACConfigMap(), capiClusterFixture(cluster)).Build()
 
@@ -922,9 +927,12 @@ func TestPublish_RefusesWrongOwnerSecret(t *testing.T) {
 	c.tenantClientFor = func([]byte) (ctrlclient.Client, error) {
 		return fake.NewClientBuilder().WithScheme(tenantScheme(t)).Build(), nil
 	}
-	err := c.publish(ctx, cluster, []byte(testAdminConf))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, capi.ErrWrongSecretOwner)
+	require.NoError(t, c.publish(ctx, cluster, []byte(testAdminConf)))
+
+	got := &corev1.Secret{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: KubeconfigSecretName(cluster.Name), Namespace: SecretsNamespace}, got))
+	assert.Equal(t, cluster.ID.String(), got.Labels[constants.LabelKeyClusterID])
+	assert.Contains(t, string(got.Data[KubeconfigSecretKey]), "k8s-spiffe-workload-jwt-exec-auth")
 }
 
 func TestController_PublishesAdminForCAPIWhenFlagsOff(t *testing.T) {
@@ -939,7 +947,7 @@ func TestController_PublishesAdminForCAPIWhenFlagsOff(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(cluster.Name)).Return([]db.Cluster{cluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(3)
+	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{joinedCPNode(nodeID, clusterID)}, nil)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
@@ -947,11 +955,80 @@ func TestController_PublishesAdminForCAPIWhenFlagsOff(t *testing.T) {
 		config.Config{TenantAccessEnabled: false},
 		mockDB,
 		k8sClient,
-		&agenttest.FakeClient{Kubeconfigs: map[uuid.UUID]string{nodeID: testKubeconfig}},
+		&agenttest.FakeClient{Kubeconfigs: map[uuid.UUID]string{nodeID: testAdminConf}},
 	)
 	_, err := c.Reconcile(ctx, reconcileRequest(cluster.Name))
 	require.NoError(t, err)
-	assertSecret(t, ctx, k8sClient, cluster, true)
+	assertKubeconfigSecret(t, ctx, k8sClient, cluster)
+}
+
+func TestPublish_PublishesCABPKBootstrapContract(t *testing.T) {
+	ctx := context.Background()
+	cluster := db.Cluster{ID: uuid.New(), Name: "capi-contract"}
+	adminConf := kubeconfigWithParseableCA(t)
+
+	mockDB := &testutil.MockDB{}
+	mockDB.On("GetCluster", mock.Anything, cluster.ID).Return(cluster, nil)
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
+	c := newPublishTestController(mockDB, k8sClient)
+
+	require.NoError(t, c.publish(ctx, cluster, adminConf))
+
+	gotCluster := &clusterv1.Cluster{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: cluster.Name, Namespace: SecretsNamespace}, gotCluster))
+	assert.Equal(t, clusterv1.APIEndpoint{Host: "198.51.100.10", Port: 6443}, gotCluster.Spec.ControlPlaneEndpoint)
+
+	parsed, err := clientcmd.Load(adminConf)
+	require.NoError(t, err)
+	wantCA, err := extractCAFromKubeconfig(parsed)
+	require.NoError(t, err)
+
+	secret := &corev1.Secret{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: clusterCASecretName(cluster.Name), Namespace: SecretsNamespace}, secret))
+	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
+	assert.Equal(t, cluster.Name, secret.Labels[clusterv1.ClusterNameLabel])
+	assert.Equal(t, "cloud-workflow-engine", secret.Labels[constants.LabelKeyNkeManagedBy])
+	assert.Equal(t, cluster.ID.String(), secret.Labels[constants.LabelKeyClusterID])
+	assert.Equal(t, wantCA, secret.Data[capisecret.TLSCrtDataName])
+	assert.Contains(t, string(secret.Data[capisecret.TLSKeyDataName]), "NOT-A-KEY")
+	assertOwnedByCAPICluster(t, secret, cluster)
+}
+
+func TestPublish_ReplacesOrphanedStaleClusterCASecret(t *testing.T) {
+	ctx := context.Background()
+	cluster := db.Cluster{ID: uuid.New(), Name: "capi-contract"}
+	adminConf := kubeconfigWithParseableCA(t)
+	stale := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      clusterCASecretName(cluster.Name),
+			Namespace: SecretsNamespace,
+			UID:       types.UID("stale-ca"),
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:     cluster.Name,
+				constants.LabelKeyClusterID:    uuid.NewString(),
+				constants.LabelKeyNkeManagedBy: "cloud-workflow-engine",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			capisecret.TLSCrtDataName: []byte("old-ca"),
+			capisecret.TLSKeyDataName: []byte("old-key"),
+		},
+	}
+
+	mockDB := &testutil.MockDB{}
+	mockDB.On("GetCluster", mock.Anything, cluster.ID).Return(cluster, nil)
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster), stale).Build()
+	c := newPublishTestController(mockDB, k8sClient)
+
+	require.NoError(t, c.publish(ctx, cluster, adminConf))
+
+	secret := &corev1.Secret{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: clusterCASecretName(cluster.Name), Namespace: SecretsNamespace}, secret))
+	assert.Equal(t, cluster.ID.String(), secret.Labels[constants.LabelKeyClusterID])
+	assert.Equal(t, cluster.Name, secret.Labels[clusterv1.ClusterNameLabel])
+	assertOwnedByCAPICluster(t, secret, cluster)
+	assert.NotEqual(t, []byte("old-ca"), secret.Data[capisecret.TLSCrtDataName])
 }
 
 func TestPublish_SkipsMissingCluster(t *testing.T) {
@@ -962,8 +1039,8 @@ func TestPublish_SkipsMissingCluster(t *testing.T) {
 	mockDB.On("GetCluster", mock.Anything, cluster.ID).Return(db.Cluster{}, db.ErrNotFound)
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
 	c := newPublishTestController(mockDB, k8sClient)
-	require.NoError(t, c.publish(ctx, cluster, []byte(testKubeconfig)))
-	assertSecret(t, ctx, k8sClient, cluster, false)
+	require.NoError(t, c.publish(ctx, cluster, kubeconfigWithParseableCA(t)))
+	assertNoSecrets(t, ctx, k8sClient, cluster)
 }
 
 func TestPublish_SkipsDeletingCluster(t *testing.T) {
@@ -976,8 +1053,8 @@ func TestPublish_SkipsDeletingCluster(t *testing.T) {
 	mockDB.On("GetCluster", mock.Anything, cluster.ID).Return(live, nil)
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
 	c := newPublishTestController(mockDB, k8sClient)
-	require.NoError(t, c.publish(ctx, cluster, []byte(testKubeconfig)))
-	assertSecret(t, ctx, k8sClient, cluster, false)
+	require.NoError(t, c.publish(ctx, cluster, kubeconfigWithParseableCA(t)))
+	assertNoSecrets(t, ctx, k8sClient, cluster)
 }
 
 func TestPublish_RewritesAdminToSPIRE(t *testing.T) {
@@ -988,9 +1065,8 @@ func TestPublish_RewritesAdminToSPIRE(t *testing.T) {
 			Name:      KubeconfigSecretName(cluster.Name),
 			Namespace: SecretsNamespace,
 			Labels: map[string]string{
-				constants.LabelKeyClusterID:      cluster.ID.String(),
-				constants.LabelKeyKubeconfigMode: constants.LabelValueKubeconfigModeAdmin,
-				clusterv1.ClusterNameLabel:       cluster.Name,
+				constants.LabelKeyClusterID: cluster.ID.String(),
+				clusterv1.ClusterNameLabel:  cluster.Name,
 			},
 		},
 		Type: corev1.SecretTypeOpaque,
@@ -1010,7 +1086,6 @@ func TestPublish_RewritesAdminToSPIRE(t *testing.T) {
 		Name:      KubeconfigSecretName(cluster.Name),
 		Namespace: SecretsNamespace,
 	}, got))
-	assert.Equal(t, constants.LabelValueKubeconfigModeSPIRE, got.Labels[constants.LabelKeyKubeconfigMode])
 	assert.Equal(t, corev1.SecretTypeOpaque, got.Type)
 	assert.Contains(t, string(got.Data[KubeconfigSecretKey]), "k8s-spiffe-workload-jwt-exec-auth")
 	assertOwnedByCAPICluster(t, got, cluster)
@@ -1060,7 +1135,6 @@ func TestPublish_UsesLiveOIDCAuthEnabled(t *testing.T) {
 		Name:      KubeconfigSecretName(live.Name),
 		Namespace: SecretsNamespace,
 	}, got))
-	assert.Equal(t, constants.LabelValueKubeconfigModeSPIRE, got.Labels[constants.LabelKeyKubeconfigMode])
 	assert.Contains(t, string(got.Data[KubeconfigSecretKey]), "k8s-spiffe-workload-jwt-exec-auth")
 }
 
@@ -1078,7 +1152,7 @@ func TestPublish_RefusesSPIREWithoutRBAC(t *testing.T) {
 
 	// The always-admin Secret is written before the SPIRE path; missing nke-rbac
 	// must not leave operators without break-glass admin.conf.
-	assertAdminSecret(t, ctx, k8sClient, cluster, testAdminConf)
+	assertAdminSecret(t, ctx, k8sClient, cluster)
 
 	controllerSecret := &corev1.Secret{}
 	controllerErr := k8sClient.Get(ctx, types.NamespacedName{
@@ -1137,6 +1211,6 @@ func TestPublish_SkipsClusterThatStartsDeletingBeforeTheWrite(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
 	c := newPublishTestController(mockDB, k8sClient)
 
-	require.NoError(t, c.publish(ctx, cluster, []byte(testKubeconfig)))
-	assertSecret(t, ctx, k8sClient, cluster, false)
+	require.NoError(t, c.publish(ctx, cluster, kubeconfigWithParseableCA(t)))
+	assertNoSecrets(t, ctx, k8sClient, cluster)
 }

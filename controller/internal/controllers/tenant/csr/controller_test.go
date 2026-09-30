@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -35,14 +36,17 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 )
 
 type staticDatabase struct {
-	cluster    db.Cluster
-	clusterErr error
-	nodes      []db.Node
-	nodesErr   error
+	cluster     db.Cluster
+	clusterErr  error
+	nodePool    db.NodePool
+	nodePoolErr error
+	nodes       []db.Node
+	nodesErr    error
 }
 
 func TestTenantCSRControllerRegistrationUsesClusterScopedNamesAndRestartOptions(t *testing.T) {
@@ -82,7 +86,7 @@ func newRegistrarForTest(t *testing.T) func(uuid.UUID) error {
 	scheme := runtime.NewScheme()
 	require.NoError(t, certificatesv1.AddToScheme(scheme))
 
-	registrar := NewRegistrar(staticDatabase{}, nil)
+	registrar := NewRegistrar(staticDatabase{}, fake.NewClientBuilder().WithScheme(scheme).Build(), nil)
 
 	return func(clusterID uuid.UUID) error {
 		t.Helper()
@@ -95,8 +99,26 @@ func newRegistrarForTest(t *testing.T) func(uuid.UUID) error {
 	}
 }
 
+func newManagementClientForCSRTest(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, clusterv1.AddToScheme(scheme))
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+}
+
 func (d staticDatabase) GetCluster(context.Context, uuid.UUID) (db.Cluster, error) {
 	return d.cluster, d.clusterErr
+}
+
+func (d staticDatabase) GetNodePool(context.Context, uuid.UUID) (db.NodePool, error) {
+	if d.nodePoolErr != nil {
+		return db.NodePool{}, d.nodePoolErr
+	}
+	if d.nodePool.ID == uuid.Nil {
+		return db.NodePool{}, db.ErrNotFound
+	}
+	return d.nodePool, nil
 }
 
 func (d staticDatabase) ListNodes(context.Context, db.NodeFilters) ([]db.Node, error) {
@@ -216,10 +238,11 @@ func TestPlanDecision(t *testing.T) {
 
 	nodes := []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}
 	valid := newServingCSR(t, "valid", time.Now(), "system:node:worker-1", []string{"system:nodes"}, []string{"worker-1"}, nil, nil)
+	machines := &clusterv1.MachineList{}
 
 	t.Run("valid CSR is approved", func(t *testing.T) {
 		t.Parallel()
-		decision := planDecision(valid, nodes)
+		decision := planServingDecision(valid, nodes, machines)
 		require.Equal(t, decisionApprove, decision.Action)
 		require.Equal(t, valid.Name, decision.CSR.Name)
 	})
@@ -227,14 +250,14 @@ func TestPlanDecision(t *testing.T) {
 	t.Run("invalid CSR is skipped", func(t *testing.T) {
 		t.Parallel()
 		invalid := newServingCSR(t, "invalid", time.Now(), "system:node:worker-1", []string{"system:nodes"}, []string{"other"}, nil, nil)
-		decision := planDecision(invalid, nodes)
+		decision := planServingDecision(invalid, nodes, machines)
 		require.Equal(t, decisionSkip, decision.Action)
 		require.Equal(t, `DNS SAN "other" does not match CWE node name`, decision.Reason)
 	})
 
 	t.Run("unknown node is skipped", func(t *testing.T) {
 		t.Parallel()
-		decision := planDecision(valid, nil)
+		decision := planServingDecision(valid, nil, machines)
 		require.Equal(t, decisionSkip, decision.Action)
 		require.Equal(t, "node is not present in CWE desired state", decision.Reason)
 	})
@@ -284,10 +307,11 @@ func TestReconcilerApprovesValidatedCSR(t *testing.T) {
 	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(csr).Build()
 
 	reconciler := &Reconciler{
-		clusterID: clusterID,
-		database:  staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
-		client:    tenantClient,
-		logger:    slog.New(slog.DiscardHandler),
+		clusterID:  clusterID,
+		database:   staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
+		mgmtClient: newManagementClientForCSRTest(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: csr.Name}})
@@ -301,6 +325,75 @@ func TestReconcilerApprovesValidatedCSR(t *testing.T) {
 	require.Equal(t, approvalReason, approved.Status.Conditions[0].Reason)
 }
 
+func TestReconcilerApprovesCAPIWorkerClientCSR(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	machineUID := types.UID("machine-uid")
+	cluster := db.Cluster{ID: clusterID, Name: "cluster-test"}
+	machineDeployment, machineSet, machine := newCAPIWorkerObjects("worker-1", machineUID, cluster.Name)
+	csr := newClientCSR(t, "worker-1-client", string(machineUID), "worker-1")
+
+	tenantScheme := runtime.NewScheme()
+	require.NoError(t, certificatesv1.AddToScheme(tenantScheme))
+	tenantClient := fake.NewClientBuilder().WithScheme(tenantScheme).WithObjects(csr).Build()
+	managementScheme := runtime.NewScheme()
+	require.NoError(t, clusterv1.AddToScheme(managementScheme))
+	managementClient := fake.NewClientBuilder().WithScheme(managementScheme).WithObjects(machineDeployment, machineSet, machine).Build()
+	reconciler := &Reconciler{
+		clusterID:  clusterID,
+		database:   staticDatabase{cluster: cluster},
+		mgmtClient: managementClient,
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: csr.Name}})
+	require.NoError(t, err)
+
+	approved := &certificatesv1.CertificateSigningRequest{}
+	require.NoError(t, tenantClient.Get(context.Background(), types.NamespacedName{Name: csr.Name}, approved))
+	require.Len(t, approved.Status.Conditions, 1)
+	require.Equal(t, certificatesv1.CertificateApproved, approved.Status.Conditions[0].Type)
+}
+
+func TestReconcilerApprovesCAPIWorkerServingCSR(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	machineUID := types.UID("machine-uid")
+	cluster := db.Cluster{ID: clusterID, Name: "cluster-test"}
+	machineDeployment, machineSet, machine := newCAPIWorkerObjects("worker-1", machineUID, cluster.Name)
+	machine.Status.NodeRef = clusterv1.MachineNodeReference{Name: "worker-1"}
+	machine.Status.Addresses = []clusterv1.MachineAddress{{
+		Type:    clusterv1.MachineInternalIP,
+		Address: "192.0.2.10",
+	}}
+	csr := newServingCSR(t, "worker-1-serving", time.Now(), "system:node:worker-1", []string{"system:nodes"}, []string{"worker-1"}, []net.IP{net.ParseIP("192.0.2.10")}, nil)
+
+	tenantScheme := runtime.NewScheme()
+	require.NoError(t, certificatesv1.AddToScheme(tenantScheme))
+	tenantClient := fake.NewClientBuilder().WithScheme(tenantScheme).WithObjects(csr).Build()
+	managementScheme := runtime.NewScheme()
+	require.NoError(t, clusterv1.AddToScheme(managementScheme))
+	managementClient := fake.NewClientBuilder().WithScheme(managementScheme).WithObjects(machineDeployment, machineSet, machine).Build()
+	reconciler := &Reconciler{
+		clusterID:  clusterID,
+		database:   staticDatabase{cluster: cluster},
+		mgmtClient: managementClient,
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: csr.Name}})
+	require.NoError(t, err)
+
+	approved := &certificatesv1.CertificateSigningRequest{}
+	require.NoError(t, tenantClient.Get(context.Background(), types.NamespacedName{Name: csr.Name}, approved))
+	require.Len(t, approved.Status.Conditions, 1)
+	require.Equal(t, certificatesv1.CertificateApproved, approved.Status.Conditions[0].Type)
+}
+
 func TestReconcilerOnlyApprovesRequestedCSR(t *testing.T) {
 	t.Parallel()
 
@@ -312,10 +405,11 @@ func TestReconcilerOnlyApprovesRequestedCSR(t *testing.T) {
 	require.NoError(t, certificatesv1.AddToScheme(scheme))
 	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(newest, older).Build()
 	reconciler := &Reconciler{
-		clusterID: clusterID,
-		database:  staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
-		client:    tenantClient,
-		logger:    slog.New(slog.DiscardHandler),
+		clusterID:  clusterID,
+		database:   staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
+		mgmtClient: newManagementClientForCSRTest(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: older.Name}})
@@ -352,10 +446,11 @@ func TestReconcilerRetriesApprovalFailure(t *testing.T) {
 		}).
 		Build()
 	reconciler := &Reconciler{
-		clusterID: clusterID,
-		database:  staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
-		client:    tenantClient,
-		logger:    slog.New(slog.DiscardHandler),
+		clusterID:  clusterID,
+		database:   staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
+		mgmtClient: newManagementClientForCSRTest(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: pending.Name}})
@@ -456,6 +551,70 @@ func newServingCSR(
 			Groups:   []string{nodeGroup},
 		},
 	}
+}
+
+func newClientCSR(t *testing.T, name, machineUID, nodeName string) *certificatesv1.CertificateSigningRequest {
+	t.Helper()
+	return &certificatesv1.CertificateSigningRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.Now()},
+		Spec: certificatesv1.CertificateSigningRequestSpec{
+			Request:    createCertificateRequest(t, nodeUsernamePrefix+nodeName, []string{nodeGroup}, nil, nil, nil),
+			SignerName: certificatesv1.KubeAPIServerClientKubeletSignerName,
+			Usages: []certificatesv1.KeyUsage{
+				certificatesv1.UsageDigitalSignature,
+				certificatesv1.UsageKeyEncipherment,
+				certificatesv1.UsageClientAuth,
+			},
+			Username: "spiffe://example.org" + joinSPIFFEPath + machineUID,
+			Groups:   []string{nodeBootstrapperGroup},
+		},
+	}
+}
+
+func newCAPIWorkerObjects(
+	nodeName string,
+	machineUID types.UID,
+	clusterName string,
+) (*clusterv1.MachineDeployment, *clusterv1.MachineSet, *clusterv1.Machine) {
+	machineDeployment := &clusterv1.MachineDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nodeName + "-md",
+			Namespace: constants.NamespaceNKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel: clusterName,
+			},
+		},
+	}
+	machineSet := &clusterv1.MachineSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nodeName + "-ms",
+			Namespace: constants.NamespaceNKESystem,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: clusterv1.GroupVersion.String(),
+				Kind:       "MachineDeployment",
+				Name:       machineDeployment.Name,
+			}},
+		},
+	}
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nodeName,
+			Namespace: constants.NamespaceNKESystem,
+			UID:       machineUID,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel: clusterName,
+			},
+			Annotations: map[string]string{
+				constants.MachineAnnotationKeySpireAgentSpiffeIDPath: "/spire/agent/tpm/test-hash",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: clusterv1.GroupVersion.String(),
+				Kind:       "MachineSet",
+				Name:       machineSet.Name,
+			}},
+		},
+	}
+	return machineDeployment, machineSet, machine
 }
 
 func createCertificateRequest(

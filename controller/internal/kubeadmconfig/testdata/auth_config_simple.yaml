@@ -10,7 +10,9 @@ anonymous:
 apiVersion: apiserver.config.k8s.io/v1
 jwt:
 - claimMappings:
-    groups: {}
+    groups:
+      expression: 'claims.sub.matches(''^spiffe://[^/]+/kubeadm/join/.+'') ? [''nke:node-bootstrapper'']
+        : []'
     uid: {}
     username:
       claim: sub

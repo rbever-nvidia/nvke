@@ -26,6 +26,12 @@ func GetTrustDomainAndBundle(ctx context.Context, cfg config.Config) (string, st
 		return "", "", fmt.Errorf("failed to fetch SPIFFE x509 context: %w", err)
 	}
 
+	return TrustDomainAndBundle(x509Context)
+}
+
+// TrustDomainAndBundle returns the trust domain and PEM-encoded trust bundle
+// from a SPIFFE X.509 context.
+func TrustDomainAndBundle(x509Context *workloadapi.X509Context) (string, string, error) {
 	if len(x509Context.SVIDs) == 0 {
 		return "", "", fmt.Errorf("no SPIFFE SVIDs found")
 	}

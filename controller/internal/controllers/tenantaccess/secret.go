@@ -11,14 +11,38 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/dsx-ai-factory/nke/controller/internal/capi"
+	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 )
+
+// upsertCAPISecret upserts one Opaque Secret whose name and label satisfy a CAPI
+// lookup contract. The kubeconfigs and the cluster CA differ only in name, data and
+// kubeconfig-mode.
+//
+// Secret Type is Opaque, not clusterv1.ClusterSecretType by design.
+// Nothing resolving these reads the type, CAPI finds a kubeconfig and CABPK finds a CA by
+// name and data key, while ClusterSecretType is CAPI's marker for a Secret its own components
+// generated, and is what KCP (if ever introduced) matches on to seize the controller reference.
+func (c *Controller) upsertCAPISecret(ctx context.Context, cluster db.Cluster, name string, data map[string][]byte) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: SecretsNamespace,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel: cluster.Name,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: data,
+	}
+	return c.upsertSecret(ctx, cluster, secret)
+}
 
 // upsertSecret publishes one Controller-owned Secret.
 //
@@ -43,8 +67,9 @@ func (c *Controller) upsertSecret(ctx context.Context, cluster db.Cluster, desir
 		}
 		return fmt.Errorf("getting CAPI cluster %s before publish: %w", key, err)
 	}
-	if err := controllerutil.SetControllerReference(capiCluster, desired, c.scheme); err != nil {
-		return fmt.Errorf("setting owner reference on secret %s/%s: %w", desired.Namespace, desired.Name, err)
+
+	if err := setSecretOwnership(desired, live, capiCluster, c.cfg.ManagedByLabelValue, c.scheme); err != nil {
+		return err
 	}
 
 	return upsertOwnedSecret(ctx, c.k8sClient, c.logger, live, desired)
@@ -61,10 +86,6 @@ func upsertOwnedSecret(
 	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("getting secret %s/%s before upsert: %w", desired.Namespace, desired.Name, err)
 	} else if err == nil && existing.Type != desired.Type {
-		if err := capi.ValidateSecretOwnership(existing, cluster); err != nil {
-			return err
-		}
-
 		logger.Info(
 			"Replacing tenant-access secret with incompatible type",
 			"clusterName", cluster.Name,
@@ -85,17 +106,14 @@ func upsertOwnedSecret(
 	}
 
 	op, err := controllerutil.CreateOrUpdate(ctx, k8sClient, secret, func() error {
-		if err := capi.ValidateSecretOwnership(secret, cluster); err != nil {
-			return err
-		}
 		if secret.Labels == nil {
 			secret.Labels = map[string]string{}
 		}
 		for key, value := range desired.Labels {
 			secret.Labels[key] = value
 		}
-		secret.Type = desired.Type
 		secret.OwnerReferences = desired.OwnerReferences
+		secret.Type = desired.Type
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
 		}
@@ -117,5 +135,19 @@ func upsertOwnedSecret(
 		controllerutil.OperationResultUpdatedStatusOnly:
 		logger.Debug("Tenant-access secret updated", "clusterName", cluster.Name, "secret", desired.Name, "operation", string(op))
 	}
+	return nil
+}
+
+func setSecretOwnership(secret *corev1.Secret, cluster db.Cluster, capiCluster *clusterv1.Cluster, managedByLabelValue string, scheme *runtime.Scheme) error {
+	if secret.Labels == nil {
+		secret.Labels = map[string]string{}
+	}
+	secret.Labels[constants.LabelKeyNkeManagedBy] = managedByLabelValue
+	secret.Labels[constants.LabelKeyClusterID] = cluster.ID.String()
+
+	if err := controllerutil.SetControllerReference(capiCluster, secret, scheme); err != nil {
+		return fmt.Errorf("setting owner reference on secret %s/%s: %w", secret.Namespace, secret.Name, err)
+	}
+
 	return nil
 }

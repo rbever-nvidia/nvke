@@ -21,7 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/dsx-ai-factory/nke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 )
@@ -123,30 +122,30 @@ func TestUpsertOwnedSecretStopsAfterDeletePreconditionConflict(t *testing.T) {
 	assert.Equal(t, []byte("old"), got.Data[KubeconfigSecretKey])
 }
 
-func TestUpsertOwnedSecretDoesNotDeleteWrongOwner(t *testing.T) {
+func TestUpsertOwnedSecretUpdatesStaleOwnershipLabels(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	cluster := db.Cluster{ID: uuid.New(), Name: "wrong-owner"}
-	existing := desiredKubeconfigSecret(cluster, clusterv1.ClusterSecretType, "old")
+	cluster := db.Cluster{ID: uuid.New(), Name: "stale-labels"}
+	existing := desiredKubeconfigSecret(cluster, corev1.SecretTypeOpaque, "old")
 	existing.Labels[constants.LabelKeyClusterID] = uuid.New().String()
 	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(existing).Build()
 	k8sClient := &recordingClient{Client: baseClient}
 
-	err := upsertOwnedSecret(
+	require.NoError(t, upsertOwnedSecret(
 		ctx,
 		k8sClient,
 		slog.Default(),
 		cluster,
 		desiredKubeconfigSecret(cluster, corev1.SecretTypeOpaque, "new"),
-	)
-	require.ErrorIs(t, err, capi.ErrWrongSecretOwner)
+	))
 	assert.Equal(t, 0, k8sClient.deletes)
 
 	got := &corev1.Secret{}
 	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(existing), got))
-	assert.Equal(t, clusterv1.ClusterSecretType, got.Type)
-	assert.Equal(t, []byte("old"), got.Data[KubeconfigSecretKey])
+	assert.Equal(t, corev1.SecretTypeOpaque, got.Type)
+	assert.Equal(t, []byte("new"), got.Data[KubeconfigSecretKey])
+	assert.Equal(t, cluster.ID.String(), got.Labels[constants.LabelKeyClusterID])
 }
 
 func TestUpsertOwnedSecretDoesNotDeleteOnValidationFailure(t *testing.T) {
@@ -184,18 +183,29 @@ func TestUpsertOwnedSecretDoesNotDeleteOnValidationFailure(t *testing.T) {
 }
 
 func desiredKubeconfigSecret(cluster db.Cluster, secretType corev1.SecretType, value string) *corev1.Secret {
+	isController := true
+	blockOwnerDeletion := true
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      KubeconfigSecretName(cluster.Name),
 			Namespace: SecretsNamespace,
 			Labels: map[string]string{
-				clusterv1.ClusterNameLabel: cluster.Name,
+				clusterv1.ClusterNameLabel:     cluster.Name,
+				constants.LabelKeyNkeManagedBy: "cloud-workflow-engine",
+				constants.LabelKeyClusterID:    cluster.ID.String(),
 			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         clusterv1.GroupVersion.String(),
+				Kind:               "Cluster",
+				Name:               cluster.Name,
+				UID:                types.UID(cluster.ID.String()),
+				Controller:         &isController,
+				BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
 		},
 		Type: secretType,
 		Data: map[string][]byte{KubeconfigSecretKey: []byte(value)},
 	}
-	capi.SetSecretOwnership(secret, cluster, constants.LabelValueKubeconfigModeAdmin, "cloud-workflow-engine")
 	return secret
 }
 

@@ -111,6 +111,9 @@ func testAuthenticationConfig() *OIDCAuthenticationConfig {
 						Claim:  "sub",
 						Prefix: stringPtr(""),
 					},
+					Groups: OIDCPrefixedClaimOrExpression{
+						Expression: oidcNodeBootstrapperExpression,
+					},
 				},
 			},
 		},

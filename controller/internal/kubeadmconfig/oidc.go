@@ -47,6 +47,10 @@ const (
 		" && !group.startsWith('nvidia:'))"
 	operatorUsernameValidationMessage = "username uses a reserved prefix"
 	operatorGroupsValidationMessage   = "groups use a reserved prefix"
+
+	// The bootstrapper group must match the tenant RBAC subjects in
+	// deploy/charts/controller/templates/nke-rbac.yaml and the CSR controller group check.
+	oidcNodeBootstrapperExpression = "claims.sub.matches('^spiffe://[^/]+/kubeadm/join/.+') ? ['nke:node-bootstrapper'] : []"
 )
 
 // publicInfoPaths are the non-resource URLs upstream's own bootstrap policy
@@ -231,6 +235,9 @@ func BuildOIDCAuthenticationConfig(clusterName string, oidc config.NkeOIDCAuth, 
 					Username: OIDCPrefixedClaimOrExpression{
 						Claim:  oidcUsernameClaim,
 						Prefix: &usernamePrefix,
+					},
+					Groups: OIDCPrefixedClaimOrExpression{
+						Expression: oidcNodeBootstrapperExpression,
 					},
 				},
 			},

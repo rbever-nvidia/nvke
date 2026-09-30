@@ -231,6 +231,16 @@ func main() {
 	)
 
 	if cfg.SpiffeEnabled {
+		spireTrustBundleController := capi.NewSpireTrustBundleController(
+			cfg,
+			k8sControllerManager.GetClient(),
+			logger.With("logger", "spire-trust-bundle-controller"),
+		)
+		if err := spireTrustBundleController.SetupWithManager(k8sControllerManager); err != nil {
+			logger.Error("Failed to set up SPIRE trust bundle controller", "error", err)
+			os.Exit(1)
+		}
+
 		tpmPubhashesCmController := tpmpubhashes.NewController(
 			cfg,
 			logger.With("logger", "tpm-pubhashes-configmap-controller"),
@@ -413,7 +423,7 @@ func main() {
 	defer temporalClient.Close()
 
 	tenantRegistrars := []tenant.Registrar{
-		csr.NewRegistrar(dbInstance, logger.With("logger", "tenant-csr-controller")),
+		csr.NewRegistrar(dbInstance, k8sControllerManager.GetClient(), logger.With("logger", "tenant-csr-controller")),
 	}
 	if !cfg.NodeHealthCheckDisabled {
 		tenantRegistrars = append(tenantRegistrars,
