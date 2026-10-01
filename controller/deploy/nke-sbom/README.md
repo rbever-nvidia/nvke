@@ -78,6 +78,12 @@ already be true, all of them outside the deploy path:
 4. **A default StorageClass exists.** A bare site ships none and every PVC sits
    Pending. The reference site used rancher local-path because its instance type has a single
    NVMe with root on it; a site with real storage should use that instead.
+5. **The site's release CRDs and resources are installed.** CWE reads its OS
+   images, user init scripts and so on from `MachineImage`, `ClusterRelease`
+   and `NodePoolRelease` resources. The chart installs the CRDs. From a second
+   shell, once the CRDs exist, run
+   `kubectl apply --server-side -f <the site's releases directory>`
+   (`nke-site-deploy/cwe-profiles/releases` for a fleet site).
 
 ## After this runs
 
