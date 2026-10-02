@@ -5,14 +5,11 @@ package activities
 
 import (
 	"context"
-	"encoding/base64"
-	"errors"
-	"fmt"
-	"strings"
 
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/dsx-ai-factory/nke/controller/internal/agent"
+	"github.com/dsx-ai-factory/nke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 	"github.com/dsx-ai-factory/nke/controller/internal/spiffe"
@@ -52,32 +49,6 @@ func NewActivities(
 	}
 }
 
-func (a *Activities) nodeAgentBootstrapFiles(node db.Node) ([]db.CloudInitFile, error) {
-	var files []db.CloudInitFile
-	args := []string{"--secure-server-port", a.cfg.NodeAgent.Port}
-	if node.NodeAgentExternalMTLSEnabled {
-		if a.controllerClientCABundle == "" {
-			return nil, errors.New("controller client CA bundle is required when external node-agent mTLS is enabled")
-		}
-
-		files = append(files, db.CloudInitFile{
-			Path:        config.NodeAgentControllerCAPath,
-			Owner:       "root:root",
-			Permissions: "0644",
-			Encoding:    "b64",
-			Content:     base64.StdEncoding.EncodeToString([]byte(a.controllerClientCABundle)),
-		})
-		args = append(args, "--controller-client-ca-bundle="+config.NodeAgentControllerCAPath)
-	}
-	if node.NodeAgentTLSJWTEnabled {
-		args = append(args, "--grpc-auth-mode=tls-jwt", "--dsx-identity-exchange-url="+a.cfg.NodeAgent.TLSJWT.DSXIdentityExchangeURL)
-	}
-	files = append(files, db.CloudInitFile{
-		Path:        config.NodeAgentConfigPath,
-		Owner:       "root:root",
-		Permissions: "0644",
-		Content:     fmt.Sprintf("AGENT_ARGS=%q\n", strings.Join(args, " ")),
-	})
-
-	return files, nil
+func (a *Activities) nodeAgentBootstrapFiles() ([]db.CloudInitFile, error) {
+	return capi.BuildNodeAgentBootstrapFiles(a.cfg, a.controllerClientCABundle)
 }
