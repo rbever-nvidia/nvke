@@ -64,6 +64,14 @@ func (a *Activities) triggerClusterTeardownNodePools(
 		nodePoolIDs = make([]uuid.UUID, len(nodePools))
 		for i, nodePool := range nodePools {
 			nodePoolIDs[i] = nodePool.ID
+			if nodePool.UsesMachineDeployment() {
+				nodePool.Conditions.Deleting = db.NewCondition(true, "Node pool deletion in progress")
+				if _, err = tx.UpdateNodePool(ctx, &nodePool); err != nil {
+					return fmt.Errorf("failed to update MachineDeployment node pool: %w", err)
+				}
+				// MachineDeployment worker pools are provisioned by the MachineDeploymentController, so we don't put the TeardownNodePool workflow in the outbox.
+				continue
+			}
 
 			workflowID := constants.TeardownNodePoolWorkflowPrefix + nodePool.ID.String()
 			if _, err = tx.CreateWorkflowOutboxEntry(ctx, "TeardownNodePool", workflowID, map[string]interface{}{

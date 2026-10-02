@@ -108,7 +108,7 @@ func TestApplyNodePoolDefaults(t *testing.T) {
 		svc.applyNodePoolDefaults(req, forgeCluster)
 		assert.Equal(t, api.DiskSelectionStrategyCreateSmallest, req.Nico.DiskSelectionStrategy)
 
-		dbNodePool, err := dbNodePoolFromAPI(req, "1.29.7")
+		dbNodePool, err := dbNodePoolFromAPI(req, "1.29.7", db.NodePoolLifecycleModeLegacy)
 		require.NoError(t, err)
 		nico, err := dbNodePool.NicoProvider()
 		require.NoError(t, err)
@@ -320,7 +320,7 @@ func TestDbNodePoolFromAPI_TeleportDefault(t *testing.T) {
 			req := baseReq(tt.reqTeleport)
 			req.ControlPlane = true
 			svc.applyNodePoolDefaults(req, dbClusterWithSiteID(uuid.New()))
-			nodePool, err := dbNodePoolFromAPI(req, "1.30.0")
+			nodePool, err := dbNodePoolFromAPI(req, "1.30.0", "")
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantTeleport, nodePool.TeleportEnabled)
 		})

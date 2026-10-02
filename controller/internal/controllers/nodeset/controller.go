@@ -99,6 +99,16 @@ func (c *Controller) reconcileNodeSet(ctx context.Context, tx db.Tx, nodeSet db.
 		"nodePoolID", nodePool.ID,
 	)
 
+	if nodePool.AutoProvisionDisabled {
+		nsLogger.Debug("Node pool has auto-provision disabled, skipping node set reconciliation")
+		return nil
+	}
+
+	if nodePool.UsesMachineDeployment() {
+		nsLogger.Debug("Node pool uses MachineDeployment lifecycle, skipping legacy node set reconciliation")
+		return nil
+	}
+
 	// When the control-plane controller manages control-plane provisioning it
 	// fully owns the control-plane node lifecycle (create and delete), tracking
 	// them as cluster-level no-nodepool nodes. Skip control-plane node sets
@@ -107,11 +117,6 @@ func (c *Controller) reconcileNodeSet(ctx context.Context, tx db.Tx, nodeSet db.
 	// controller.
 	if nodePool.ControlPlane && c.cfg.UseControlPlaneControllerForControlPlane() {
 		nsLogger.Debug("Control-plane node set fully managed by control-plane controller; skipping")
-		return nil
-	}
-
-	if nodePool.AutoProvisionDisabled {
-		nsLogger.Debug("Node pool has auto-provision disabled, skipping node set reconciliation")
 		return nil
 	}
 

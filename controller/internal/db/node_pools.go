@@ -31,6 +31,16 @@ const (
 	SpireAttestationMethodDSXIMDS   SpireAttestationMethod = "dsxImds"
 )
 
+// NodePoolLifecycleMode identifies the lifecycle mode of a node pool.
+type NodePoolLifecycleMode string
+
+const (
+	// NodePoolLifecycleModeLegacy routes nodes through NodeSets, database Nodes, and Temporal.
+	NodePoolLifecycleModeLegacy NodePoolLifecycleMode = "legacy"
+	// NodePoolLifecycleModeMachineDeployment routes workers through a CAPI MachineDeployment.
+	NodePoolLifecycleModeMachineDeployment NodePoolLifecycleMode = "machineDeployment"
+)
+
 type NicoNodePoolProvider struct {
 	SubnetIDs                []uuid.UUID           `json:"subnet_ids,omitempty"`
 	VpcPrefixIDs             []uuid.UUID           `json:"vpc_prefix_ids,omitempty"`
@@ -91,18 +101,19 @@ func cloudInitFilesEqual(a, b []CloudInitFile) bool {
 }
 
 type NodePool struct {
-	ID                   uuid.UUID          `bun:"type:uuid,pk"`
-	ClusterID            uuid.UUID          `bun:"type:uuid,notnull"`
-	Name                 string             `bun:"type:text,notnull"`
-	NodeNamePrefix       string             `bun:"type:text,notnull"`
-	Description          *string            `bun:"type:text"`
-	SystemReservedMemory string             `bun:"type:text,notnull,default:'16Gi'"`
-	KubeReservedMemory   string             `bun:"type:text,notnull,default:''"`
-	ControlPlane         bool               `bun:"type:boolean,notnull"`
-	NodeLabels           []string           `bun:"type:text[],notnull"`
-	Conditions           NodePoolConditions `bun:"type:jsonb"`
-	CreatedAt            time.Time          `bun:"type:timestamptz,notnull,default:current_timestamp"`
-	UpdatedAt            time.Time          `bun:"type:timestamptz,notnull,default:current_timestamp"`
+	ID                   uuid.UUID           `bun:"type:uuid,pk"`
+	ClusterID            uuid.UUID           `bun:"type:uuid,notnull"`
+	Name                 string              `bun:"type:text,notnull"`
+	NodeNamePrefix       string              `bun:"type:text,notnull"`
+	Description          *string             `bun:"type:text"`
+	SystemReservedMemory string              `bun:"type:text,notnull,default:'16Gi'"`
+	KubeReservedMemory   string              `bun:"type:text,notnull,default:''"`
+	ControlPlane         bool                `bun:"type:boolean,notnull"`
+	LifecycleMode        NodePoolLifecycleMode `bun:"type:text,notnull,default:'legacy'"`
+	NodeLabels           []string            `bun:"type:text[],notnull"`
+	Conditions           NodePoolConditions  `bun:"type:jsonb"`
+	CreatedAt            time.Time           `bun:"type:timestamptz,notnull,default:current_timestamp"`
+	UpdatedAt            time.Time           `bun:"type:timestamptz,notnull,default:current_timestamp"`
 
 	// This is the desired Kubernetes version for this NodePool.
 	// During upgrades, existing NodeSets may contain different Kubernetes versions
@@ -155,6 +166,12 @@ type NodePool struct {
 
 	Nico *NicoNodePoolProvider `bun:"nico,type:jsonb"`
 	Capi *CAPINodePoolProvider `bun:"capi,type:jsonb"`
+}
+
+// UsesMachineDeployment reports whether this worker pool is owned by CAPI's
+// MachineDeployment lifecycle instead of the legacy NodeSet and Temporal path.
+func (n NodePool) UsesMachineDeployment() bool {
+	return n.LifecycleMode == NodePoolLifecycleModeMachineDeployment
 }
 
 // IsCurrentNodeSet returns true if the NodeSet is the current NodeSet for the NodePool.

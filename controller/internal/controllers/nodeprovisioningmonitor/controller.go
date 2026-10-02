@@ -104,6 +104,11 @@ func (c *Controller) reconcile(ctx context.Context, tx db.Tx, dbNode db.Node) (r
 		"provisioningAge", provisioningAge.String(),
 	)
 
+	if nodePool.UsesMachineDeployment() {
+		logger.Debug("Node pool uses MachineDeployment lifecycle, skipping legacy provisioning monitor")
+		return reconcile.Result{}, nil
+	}
+
 	if nodePool.ControlPlane {
 		logger.Info("Provisioning monitor does not recycle control plane nodes, skipping stuck-node recycling")
 		return reconcile.Result{}, nil

@@ -17,7 +17,7 @@ import (
 )
 
 func TestValidateCreateNodePoolRequest_CAPICloudInitInputs(t *testing.T) {
-	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false)
+	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false, false)
 
 	req := &api.CreateNodePoolRequest{
 		Name:             "worker",
@@ -36,7 +36,7 @@ func TestValidateCreateNodePoolRequest_CAPICloudInitInputs(t *testing.T) {
 }
 
 func TestValidateCreateNodePoolRequest_CAPIAllowsMissingConfigProfile(t *testing.T) {
-	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false)
+	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false, false)
 
 	req := &api.CreateNodePoolRequest{
 		Name:             "worker",
@@ -51,7 +51,7 @@ func TestValidateCreateNodePoolRequest_CAPIAllowsMissingConfigProfile(t *testing
 }
 
 func TestValidateCreateNodePoolRequest_CAPIRejectsNicoPayload(t *testing.T) {
-	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false)
+	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false, false)
 
 	err := service.validateCreateNodePoolRequest(capiCluster(), &api.CreateNodePoolRequest{
 		Name:             "worker",
@@ -63,7 +63,7 @@ func TestValidateCreateNodePoolRequest_CAPIRejectsNicoPayload(t *testing.T) {
 }
 
 func TestValidateCreateNodePoolRequest_ForgeRejectsCAPICloudInitInputs(t *testing.T) {
-	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false)
+	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false, false)
 
 	err := service.validateCreateNodePoolRequest(forgeCluster(), &api.CreateNodePoolRequest{
 		Name:             "worker",
@@ -83,7 +83,7 @@ func TestValidateCreateNodePoolRequest_ForgeRejectsCAPICloudInitInputs(t *testin
 }
 
 func TestValidateCreateNodePoolRequest_ForgeRequiresConfigProfile(t *testing.T) {
-	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false)
+	service := NewNodePoolService(slog.Default(), nil, config.TeleportConfig{}, nil, false, false)
 
 	req := &api.CreateNodePoolRequest{
 		Name:             "worker",
@@ -112,7 +112,7 @@ func TestValidateUpdatedNodePool_RejectsManagedSpirePathsWhenSpireEnabled(t *tes
 			},
 		},
 	}
-	dbNodePool, err := dbNodePoolFromAPI(req, "1.32.0")
+	dbNodePool, err := dbNodePoolFromAPI(req, "1.32.0", db.NodePoolLifecycleModeLegacy)
 	require.NoError(t, err)
 
 	err = validateUpdatedNodePool(capiCluster(), &dbNodePool)
@@ -131,7 +131,7 @@ func TestDBNodePoolFromAPI_CopiesCAPICloudInitInputs(t *testing.T) {
 			PreKubeadmCommands: []string{"echo before kubeadm"},
 		},
 	}
-	dbNodePool, err := dbNodePoolFromAPI(req, "1.32.0")
+	dbNodePool, err := dbNodePoolFromAPI(req, "1.32.0", db.NodePoolLifecycleModeLegacy)
 	require.NoError(t, err)
 	capiProvider, err := dbNodePool.CAPIProvider()
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestDbNodePoolFromAPI_EveryNestedNicoFieldReachesTheStoredPool(t *testing.T
 		},
 	}
 
-	pool, err := dbNodePoolFromAPI(req, "1.31.0")
+	pool, err := dbNodePoolFromAPI(req, "1.31.0", db.NodePoolLifecycleModeLegacy)
 	require.NoError(t, err)
 	require.NotNil(t, pool.Nico)
 	assert.Nil(t, pool.Capi)
@@ -220,7 +220,7 @@ func TestDbNodePoolFromAPI_EveryNestedCapiFieldReachesTheStoredPool(t *testing.T
 		},
 	}
 
-	pool, err := dbNodePoolFromAPI(req, "1.31.0")
+	pool, err := dbNodePoolFromAPI(req, "1.31.0", db.NodePoolLifecycleModeLegacy)
 	require.NoError(t, err)
 	require.NotNil(t, pool.Capi)
 	assert.Nil(t, pool.Nico)

@@ -49,7 +49,8 @@ type nodePoolService struct {
 	// PROVISION_CONTROL_PLANE_WITH_CONTROL_PLANE_CONTROLLER. When true,
 	// control-plane node pools are rejected on create/update because the control
 	// plane is provisioned from the cluster-level controlPlaneConfig instead.
-	useControlPlaneController bool
+	useControlPlaneController       bool
+	machineDeploymentWorkersEnabled bool
 }
 
 func NewNodePoolService(
@@ -58,14 +59,23 @@ func NewNodePoolService(
 	teleportCfg config.TeleportConfig,
 	supportedInfraProviders []string,
 	useControlPlaneController bool,
+	machineDeploymentWorkersEnabled bool,
 ) *nodePoolService {
 	return &nodePoolService{
-		logger:                    logger,
-		db:                        database,
-		teleportCfg:               teleportCfg,
-		providers:                 newProviderSupport(supportedInfraProviders),
-		useControlPlaneController: useControlPlaneController,
+		logger:                          logger,
+		db:                              database,
+		teleportCfg:                     teleportCfg,
+		providers:                       newProviderSupport(supportedInfraProviders),
+		useControlPlaneController:       useControlPlaneController,
+		machineDeploymentWorkersEnabled: machineDeploymentWorkersEnabled,
 	}
+}
+
+func (s *nodePoolService) nodePoolLifecycleMode(req *api.CreateNodePoolRequest) db.NodePoolLifecycleMode {
+	if req.ControlPlane || !s.machineDeploymentWorkersEnabled {
+		return db.NodePoolLifecycleModeLegacy
+	}
+	return db.NodePoolLifecycleModeMachineDeployment
 }
 
 // applyNodePoolDefaults fills in server-side defaults for omitted node pool fields
@@ -135,7 +145,8 @@ func (s *nodePoolService) CreateNodePool(
 		}
 
 		s.applyNodePoolDefaults(req.Body, cluster)
-		dbNodePool, err := dbNodePoolFromAPI(req.Body, cluster.KubernetesVersion)
+		lifecycleMode := s.nodePoolLifecycleMode(req.Body)
+		dbNodePool, err := dbNodePoolFromAPI(req.Body, cluster.KubernetesVersion, lifecycleMode)
 		if err != nil {
 			return fmt.Errorf("failed to convert node pool request: %w", err)
 		}
@@ -160,6 +171,11 @@ func (s *nodePoolService) CreateNodePool(
 		createdNodePool, err = tx.CreateNodePool(ctx, &dbNodePool)
 		if err != nil {
 			return fmt.Errorf("failed to create node pool: %w", err)
+		}
+
+		if createdNodePool.UsesMachineDeployment() {
+			// MachineDeployment worker pools are provisioned by the MachineDeploymentController, so we don't put the ProvisionNodePool workflow in the outbox.
+			return nil
 		}
 
 		workflowID := constants.ProvisionNodePoolWorkflowPrefix + createdNodePool.ID.String()
@@ -260,7 +276,8 @@ func (s *nodePoolService) validateCreateNodePoolRequest(cluster db.Cluster, req 
 		if err := s.providers.require(config.InfraProviderNico); err != nil {
 			return err
 		}
-		return validateCreateNicoNodePoolRequest(req)
+		lifecycleMode := s.nodePoolLifecycleMode(req)
+		return validateCreateNicoNodePoolRequest(req, lifecycleMode)
 	default:
 		return fmt.Errorf("unsupported cluster provider")
 	}
@@ -285,7 +302,7 @@ func validateCreateCAPINodePoolRequest(req *api.CreateNodePoolRequest) error {
 	return nil
 }
 
-func validateCreateNicoNodePoolRequest(req *api.CreateNodePoolRequest) error {
+func validateCreateNicoNodePoolRequest(req *api.CreateNodePoolRequest, lifecycleMode db.NodePoolLifecycleMode) error {
 	if req.Infra != nil {
 		return fmt.Errorf("infra is not supported, please provide nico")
 	}
@@ -303,8 +320,11 @@ func validateCreateNicoNodePoolRequest(req *api.CreateNodePoolRequest) error {
 	if req.Nico.OSProfile == "" {
 		return fmt.Errorf("nico.osProfile is required when creating a nico node pool")
 	}
-	if req.Nico.ConfigProfile == "" {
+	if lifecycleMode == db.NodePoolLifecycleModeLegacy && req.Nico.ConfigProfile == "" {
 		return fmt.Errorf("nico.configProfile is required when creating a nico node pool")
+	}
+	if lifecycleMode == db.NodePoolLifecycleModeMachineDeployment && req.Nico.ConfigProfile != "" {
+		return fmt.Errorf("nico.configProfile is not supported for MachineDeployment worker pools")
 	}
 
 	if err := validateNicoNetworkSelection(req.Nico.SubnetIDs, req.Nico.VpcPrefixIDs, "nico."); err != nil {
@@ -407,7 +427,7 @@ func (s *nodePoolService) UpdateNodePool(
 			previousControlPlaneCount = desiredControlPlaneNodeCount(nodePools)
 		}
 
-		if err := s.validateUpdateNodePoolRequest(cluster, req.Body); err != nil {
+		if err := s.validateUpdateNodePoolRequest(cluster, dbNodePool, req.Body); err != nil {
 			return &badRequestError{message: err.Error()}
 		}
 
@@ -662,8 +682,8 @@ func validateUpdatedForgeNodePool(dbNodePool *db.NodePool) error {
 	return nil
 }
 
-// validateUpdateNodePoolRequest validates cluster-type-specific update fields before the request is applied.
-func (s *nodePoolService) validateUpdateNodePoolRequest(cluster db.Cluster, req *api.UpdateNodePoolRequest) error {
+// validateUpdateNodePoolRequest validates update fields before the request is applied.
+func (s *nodePoolService) validateUpdateNodePoolRequest(cluster db.Cluster, nodePool db.NodePool, req *api.UpdateNodePoolRequest) error {
 	switch cluster.ProviderType {
 	case db.ProviderTypeCAPI:
 		if req != nil && (req.Infra != nil || req.Nico != nil) {
@@ -678,7 +698,7 @@ func (s *nodePoolService) validateUpdateNodePoolRequest(cluster db.Cluster, req 
 				return err
 			}
 		}
-		return validateUpdateNicoNodePoolRequest(req)
+		return validateUpdateNicoNodePoolRequest(nodePool, req)
 	default:
 		return fmt.Errorf("unsupported cluster provider")
 	}
@@ -704,7 +724,7 @@ func validateUpdateCAPINodePoolRequest(req *api.UpdateNodePoolRequest) error {
 	return nil
 }
 
-func validateUpdateNicoNodePoolRequest(req *api.UpdateNodePoolRequest) error {
+func validateUpdateNicoNodePoolRequest(nodePool db.NodePool, req *api.UpdateNodePoolRequest) error {
 	if req.Infra != nil {
 		return fmt.Errorf("infra is not supported, please use nico")
 	}
@@ -719,6 +739,9 @@ func validateUpdateNicoNodePoolRequest(req *api.UpdateNodePoolRequest) error {
 	if req.Nico != nil {
 		if req.Nico.OSProfile != nil && *req.Nico.OSProfile == "" {
 			return fmt.Errorf("nico.osProfile cannot be cleared for a nico node pool")
+		}
+		if req.Nico.ConfigProfile != nil && nodePool.UsesMachineDeployment() {
+			return fmt.Errorf("nico.configProfile is not supported for MachineDeployment worker pools")
 		}
 		if req.Nico.ConfigProfile != nil && *req.Nico.ConfigProfile == "" {
 			return fmt.Errorf("nico.configProfile cannot be cleared for a nico node pool")
@@ -853,10 +876,7 @@ func cloneUUIDSlicePtr(s []uuid.UUID) *[]uuid.UUID {
 	return &out
 }
 
-func dbNodePoolFromAPI(
-	req *api.CreateNodePoolRequest,
-	kubernetesVersion string,
-) (db.NodePool, error) {
+func dbNodePoolFromAPI(req *api.CreateNodePoolRequest, kubernetesVersion string, lifecycleMode db.NodePoolLifecycleMode) (db.NodePool, error) {
 	nodeLabels := make([]string, 0)
 	if req.NodeLabels != nil {
 		nodeLabels = *req.NodeLabels
@@ -887,6 +907,7 @@ func dbNodePoolFromAPI(
 		SystemReservedMemory: req.SystemReservedMemory,
 		KubeReservedMemory:   req.KubeReservedMemory,
 		ControlPlane:         req.ControlPlane,
+		LifecycleMode:        lifecycleMode,
 		NodeLabels:           nodeLabels,
 		Conditions: db.NodePoolConditions{
 			Provisioning: db.NewCondition(true, "Starting provisioning"),

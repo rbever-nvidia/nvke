@@ -195,6 +195,7 @@ func NewServerImpl(cfg config.Config, logger *slog.Logger, database db.DB, tempo
 		cfg.Teleport,
 		cfg.SupportedInfraProviders,
 		cfg.UseControlPlaneControllerForControlPlane(),
+		cfg.MachineDeploymentWorkersEnabled,
 	)
 
 	return &serverImpl{

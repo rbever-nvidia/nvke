@@ -110,6 +110,11 @@ func (c *Controller) reconcileAutoMode(ctx context.Context, tx db.Tx, nodePool d
 		return nil
 	}
 
+	if nodePool.UsesMachineDeployment() {
+		logger.Debug("Node pool uses MachineDeployment lifecycle, skipping legacy auto-mode reconciliation")
+		return nil
+	}
+
 	if nodePool.RecycleBudget <= 0 {
 		logger.Debug("Node pool has no recycle budget, skipping auto-mode reconciliation")
 		return nil

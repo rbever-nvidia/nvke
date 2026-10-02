@@ -48,7 +48,7 @@ func newTestClusterService(logger *slog.Logger, mockDB *mockDB) clusterService {
 // PROVISION_CONTROL_PLANE_WITH_CONTROL_PLANE_CONTROLLER feature flag set to
 // useControlPlaneController.
 func newTestClusterServiceWithControlPlaneController(logger *slog.Logger, mockDB *mockDB, useControlPlaneController bool) clusterService {
-	nodePoolService := server.NewNodePoolService(logger, mockDB, config.TeleportConfig{}, nil, useControlPlaneController)
+	nodePoolService := server.NewNodePoolService(logger, mockDB, config.TeleportConfig{}, nil, useControlPlaneController, false)
 	return server.NewClusterService(logger, mockDB, nodePoolService, config.TeleportConfig{}, false, nil, useControlPlaneController)
 }
 
@@ -2089,7 +2089,7 @@ func TestClusterService_UpdateCluster_ControlPlaneConfig_RejectsUnsupportedProvi
 		ProviderType: db.ProviderTypeNico,
 	}, nil).Once()
 
-	nodePoolService := server.NewNodePoolService(discardLogger(), mockDB, config.TeleportConfig{}, []string{config.InfraProviderInfra}, false)
+	nodePoolService := server.NewNodePoolService(discardLogger(), mockDB, config.TeleportConfig{}, []string{config.InfraProviderInfra}, false, false)
 	svc := server.NewClusterService(
 		discardLogger(),
 		mockDB,

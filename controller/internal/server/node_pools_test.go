@@ -219,7 +219,7 @@ func TestNodePoolService_ListNodePools(t *testing.T) {
 			mockDB := &mockDB{}
 			mockDB.On("ListNodePools", mock.Anything, tt.filters).Return(tt.dbNodePools, tt.dbError)
 
-			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false)
+			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false, false)
 
 			resp, err := service.ListNodePools(context.Background(), api.ListNodePoolsRequestObject{
 				Params: api.ListNodePoolsParams{
@@ -461,7 +461,7 @@ func TestNodePoolService_CreateNodePool(t *testing.T) {
 
 			mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 
-			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false)
+			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false, false)
 
 			resp, err := service.CreateNodePool(context.Background(), api.CreateNodePoolRequestObject{
 				Body: &tt.request,
@@ -496,6 +496,102 @@ func TestNodePoolService_CreateNodePool(t *testing.T) {
 			mockDB.MockTx.AssertExpectations(t)
 		})
 	}
+}
+
+func TestNodePoolService_CreateMachineDeploymentNodePool(t *testing.T) {
+	clusterID := uuid.New()
+	nodePoolID := uuid.New()
+	cluster := db.Cluster{
+		ID:           clusterID,
+		ProviderType: db.ProviderTypeNico,
+		PodCIDR:      "192.168.0.0/16",
+		ServiceCIDR:  "10.96.0.0/12",
+		Nico: &db.NicoClusterProvider{
+			OrgID:  testOrgID,
+			SiteID: uuid.New(),
+		},
+	}
+	request := api.CreateNodePoolRequest{
+		ClusterID:      clusterID,
+		Name:           "workers",
+		NodeNamePrefix: "worker",
+		Nico: &api.NicoNodePoolProvider{
+			SubnetIDs:      []uuid.UUID{uuid.New()},
+			InstanceTypeID: uuid.New(),
+			OSProfile:      "ubuntu",
+		},
+		DesiredNodeCount: 1,
+	}
+
+	mockDB := &mockDB{MockTx: &mockTx{}}
+	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil)
+	mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
+	mockDB.MockTx.On("GetClusterForUpdate", mock.Anything, clusterID).Return(cluster, nil)
+	mockDB.MockTx.On("ListNodePools", mock.Anything, db.NodePoolFilters{ClusterID: &clusterID}).Return([]db.NodePool{}, nil)
+	mockDB.MockTx.On("CreateNodePool", mock.Anything, mock.MatchedBy(func(nodePool *db.NodePool) bool {
+		return nodePool.LifecycleMode == db.NodePoolLifecycleModeMachineDeployment &&
+			nodePool.Nico != nil && nodePool.Nico.ConfigProfile == ""
+	})).Return(db.NodePool{
+		ID:             nodePoolID,
+		ClusterID:      clusterID,
+		Name:           request.Name,
+		NodeNamePrefix: request.NodeNamePrefix,
+		LifecycleMode:  db.NodePoolLifecycleModeMachineDeployment,
+		Nico:           &db.NicoNodePoolProvider{},
+	}, nil)
+
+	service := server.NewNodePoolService(
+		slog.Default(),
+		mockDB,
+		config.TeleportConfig{},
+		nil,
+		false,
+		true,
+	)
+	response, err := service.CreateNodePool(context.Background(), api.CreateNodePoolRequestObject{Body: &request})
+
+	require.NoError(t, err)
+	require.IsType(t, api.CreateNodePool201JSONResponse{}, response)
+	mockDB.AssertExpectations(t)
+	mockDB.MockTx.AssertExpectations(t)
+	mockDB.MockTx.AssertNotCalled(t, "CreateWorkflowOutboxEntry", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestNodePoolService_RejectsConfigProfileForMachineDeployment(t *testing.T) {
+	clusterID := uuid.New()
+	mockDB := &mockDB{}
+	mockDB.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{
+		ID:           clusterID,
+		ProviderType: db.ProviderTypeNico,
+	}, nil)
+
+	service := server.NewNodePoolService(
+		slog.Default(),
+		mockDB,
+		config.TeleportConfig{},
+		nil,
+		false,
+		true,
+	)
+	response, err := service.CreateNodePool(context.Background(), api.CreateNodePoolRequestObject{
+		Body: &api.CreateNodePoolRequest{
+			ClusterID:      clusterID,
+			Name:           "workers",
+			NodeNamePrefix: "worker",
+			Nico: &api.NicoNodePoolProvider{
+				SubnetIDs:      []uuid.UUID{uuid.New()},
+				InstanceTypeID: uuid.New(),
+				OSProfile:      "ubuntu",
+				ConfigProfile:  "legacy-profile",
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t,
+		"nico.configProfile is not supported for MachineDeployment worker pools",
+		response.(api.CreateNodePool400JSONResponse).Message,
+	)
 }
 
 func TestNodePoolService_GetNodePool(t *testing.T) {
@@ -562,7 +658,7 @@ func TestNodePoolService_GetNodePool(t *testing.T) {
 			mockDB := &mockDB{}
 			mockDB.On("GetNodePool", mock.Anything, tt.nodePoolID).Return(tt.dbNodePool, tt.dbError)
 
-			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false)
+			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false, false)
 
 			resp, err := service.GetNodePool(context.Background(), api.GetNodePoolRequestObject{
 				NodePoolID: tt.nodePoolID,
@@ -1073,6 +1169,23 @@ func TestNodePoolService_UpdateNodePool(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:       "rejects config profile for MachineDeployment pool",
+			nodePoolID: nodePoolID,
+			body: api.UpdateNodePoolRequest{
+				Nico: &api.NicoNodePoolProviderUpdate{ConfigProfile: testutil.PtrTo("legacy-profile")},
+			},
+			setupMockDB: func(_ *mockDB, tx *mockTx) {
+				tx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(db.NodePool{
+					ID:            nodePoolID,
+					ClusterID:     clusterID,
+					LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+					Conditions:    mockDBNodePoolConditions(now),
+					Nico:          &db.NicoNodePoolProvider{},
+				}, nil)
+			},
+			wantResponseType: api.UpdateNodePool400JSONResponse{},
+		},
+		{
 			name:       "tx validation failure returns 400 response",
 			nodePoolID: nodePoolID,
 			body: api.UpdateNodePoolRequest{
@@ -1131,7 +1244,7 @@ func TestNodePoolService_UpdateNodePool(t *testing.T) {
 			).Maybe().Return([]db.NodePool{{ID: nodePoolID}}, nil)
 			mockDB.On("RunInTx", mock.Anything, mock.Anything).Maybe().Return(nil)
 
-			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false)
+			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false, false)
 
 			resp, err := service.UpdateNodePool(context.Background(), api.UpdateNodePoolRequestObject{
 				NodePoolID: tt.nodePoolID,
@@ -1200,7 +1313,7 @@ func TestNodePoolService_UpdateNodePool_RejectsPodCIDRCapacityExceeded(t *testin
 	}}, nil)
 	mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 
-	service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false)
+	service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false, false)
 	resp, err := service.UpdateNodePool(context.Background(), api.UpdateNodePoolRequestObject{
 		NodePoolID: nodePoolID,
 		Body: &api.UpdateNodePoolRequest{
@@ -1384,7 +1497,7 @@ func TestNodePoolService_DeleteNodePool(t *testing.T) {
 
 			mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 
-			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false)
+			service := server.NewNodePoolService(&slog.Logger{}, mockDB, config.TeleportConfig{}, nil, false, false)
 
 			resp, err := service.DeleteNodePool(context.Background(), api.DeleteNodePoolRequestObject{
 				NodePoolID: tt.nodePoolID,

@@ -82,6 +82,10 @@ controllers:
     # -- Run controllers that watch NICo infrastructure resources.
     enabled: true
 
+workers:
+  # -- Use MachineDeployment as the lifecycle owner for newly created worker node pools.
+  machineDeploymentEnabled: false
+
 nodeAgent:
   # -- SPIRE node attestation method pinned to newly created nodes. Changing
   # this deployment default does not reconfigure existing nodes; keep their

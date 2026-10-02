@@ -42,6 +42,11 @@ func TestUnit_ReconcileSkipsNodePools(t *testing.T) {
 				nodePool.AutoModeDisabled = true
 			}),
 		},
+		"MachineDeployment lifecycle": {
+			nodePool: baseNodePool(nodePoolID, currentNodeSetID, func(nodePool *db.NodePool) {
+				nodePool.LifecycleMode = db.NodePoolLifecycleModeMachineDeployment
+			}),
+		},
 		"control plane": {
 			nodePool: baseNodePool(nodePoolID, currentNodeSetID, func(nodePool *db.NodePool) {
 				nodePool.ControlPlane = true

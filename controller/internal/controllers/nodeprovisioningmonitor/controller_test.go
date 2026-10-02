@@ -162,4 +162,46 @@ func TestController_Reconcile(t *testing.T) {
 		mockDB.AssertExpectations(t)
 		mockTx.AssertExpectations(t)
 	})
+
+	t.Run("skips stale node from MachineDeployment pool", func(t *testing.T) {
+		ctx := context.Background()
+		nodeID := uuid.New()
+		nodeSetID := uuid.New()
+		nodePoolID := uuid.New()
+		timeout := 30 * time.Minute
+		startedAt := time.Now().Add(-2 * timeout)
+		node := db.Node{
+			ID:         nodeID,
+			NodePoolID: nodePoolID,
+			NodeSetID:  nodeSetID,
+			CreatedAt:  startedAt,
+			Conditions: db.NodeConditions{
+				Provisioning: db.Condition{Status: db.ConditionStatusTrue, LastTransitionTime: startedAt},
+			},
+		}
+		nodePool := db.NodePool{
+			ID:            nodePoolID,
+			LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+		}
+
+		mockDB := &testutil.MockDB{}
+		mockTx := &testutil.MockTx{}
+		mockDB.MockTx = mockTx
+		mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
+		mockTx.On("GetNodeForUpdate", mock.Anything, nodeID).Return(node, nil)
+		mockNodeContextFromPool(mockTx, nodeSetID, nodePool)
+
+		controller := nodeprovisioningmonitor.NewController(
+			config.Config{NodeProvisioningTimeout: timeout},
+			slog.Default(),
+			dbwrapper.New(mockDB, slog.Default()),
+		)
+		result, err := controller.Reconcile(ctx, dbreconcile.NodeKey(nodeID))
+
+		require.NoError(t, err)
+		assert.Zero(t, result)
+		mockTx.AssertExpectations(t)
+		mockTx.AssertNotCalled(t, "UpdateNode", mock.Anything, mock.Anything)
+		mockTx.AssertNotCalled(t, "CreateWorkflowOutboxEntry", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }

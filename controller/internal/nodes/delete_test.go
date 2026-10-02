@@ -18,6 +18,30 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/testutil"
 )
 
+func TestDeleteMachineDeploymentNodePoolSkipsLegacyTeardown(t *testing.T) {
+	ctx := context.Background()
+	nodePoolID := uuid.New()
+	clusterID := uuid.New()
+	nodePool := db.NodePool{
+		ID:            nodePoolID,
+		ClusterID:     clusterID,
+		LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+	}
+	tx := &testutil.MockTx{}
+	tx.On("GetNodePool", mock.Anything, nodePoolID).Return(nodePool, nil)
+	tx.On("GetClusterForUpdate", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID}, nil)
+	tx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(nodePool, nil)
+	tx.On("UpdateNodePool", mock.Anything, mock.MatchedBy(func(pool *db.NodePool) bool {
+		return pool.Conditions.Deleting.Status == db.ConditionStatusTrue
+	})).Return(nodePool, nil)
+
+	err := nodes.DeleteNodePoolWithTx(ctx, tx, nodePoolID)
+
+	require.NoError(t, err)
+	tx.AssertExpectations(t)
+	tx.AssertNotCalled(t, "CreateWorkflowOutboxEntry", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestDelete(t *testing.T) {
 	nodeID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
 	nodePoolID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440001")

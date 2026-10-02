@@ -81,6 +81,23 @@ func TestUnit_Reconcile(t *testing.T) {
 	}
 
 	tests := map[string]parameters{
+		"skips MachineDeployment worker pool": {
+			nodeSet: baseNodeSet,
+			setup: func(mockDB *testutil.MockDB, mockTx *testutil.MockTx, nodeSet db.NodeSet) {
+				machineDeploymentPool := baseNodePool
+				machineDeploymentPool.ControlPlane = false
+				machineDeploymentPool.LifecycleMode = db.NodePoolLifecycleModeMachineDeployment
+				mockDB.MockTx = mockTx
+				mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
+				mockTx.On("GetNodeSet", mock.Anything, nodeSet.ID).Return(nodeSet, nil)
+				mockTx.On("GetNodePool", mock.Anything, nodePoolID).Return(machineDeploymentPool, nil)
+			},
+			verify: func(t *testing.T, _ *testutil.MockDB, mockTx *testutil.MockTx) {
+				t.Helper()
+				mockTx.AssertNotCalled(t, "ListNodes", mock.Anything, mock.Anything)
+				mockTx.AssertNotCalled(t, "CreateNode", mock.Anything, mock.Anything)
+			},
+		},
 		"creates control plane node when control plane controller is disabled": {
 			nodeSet: baseNodeSet,
 			cfg: config.Config{

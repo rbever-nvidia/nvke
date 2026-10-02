@@ -88,6 +88,12 @@ func (s *NodePoolNodeScheduler) reconcileNodePool(ctx context.Context, nodePool 
 		logger.Debug("Node pool has auto-provision disabled, skipping node pool nodes scheduling")
 		return reconcile.Result{}, nil
 	}
+
+	if nodePool.UsesMachineDeployment() {
+		logger.Debug("Node pool uses MachineDeployment lifecycle, skipping legacy node scheduling")
+		return reconcile.Result{}, nil
+	}
+
 	if nodePool.Conditions.Deleting.Status == db.ConditionStatusTrue {
 		logger.Debug("Node pool is deleting, skipping node pool nodes scheduling")
 		return reconcile.Result{}, nil

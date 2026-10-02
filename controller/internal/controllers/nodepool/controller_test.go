@@ -164,6 +164,31 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 		mockTx.AssertNotCalled(t, "CreateNodeSet", mock.Anything, mock.Anything)
 	})
 
+	t.Run("skips_MachineDeployment_pool", func(t *testing.T) {
+		poolID := mustParse("550e8400-e29b-41d4-a716-446655440001")
+		pool := db.NodePool{
+			ID:            poolID,
+			ClusterID:     mustParse("550e8400-e29b-41d4-a716-446655440002"),
+			Name:          "worker",
+			LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+			Conditions:    db.NodePoolConditions{},
+		}
+
+		mockDB := &testutil.MockDB{}
+		mockTx := &testutil.MockTx{}
+		mockDB.MockTx = mockTx
+		mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
+		mockTx.On("GetNodePoolForUpdate", mock.Anything, poolID).Return(pool, nil)
+
+		npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+
+		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
+		require.NoError(t, err)
+		mockDB.AssertExpectations(t)
+		mockTx.AssertExpectations(t)
+		mockTx.AssertNotCalled(t, "CreateNodeSet", mock.Anything, mock.Anything)
+	})
+
 	t.Run("skips_when_pool_deleting", func(t *testing.T) {
 		poolID := mustParse("550e8400-e29b-41d4-a716-446655440001")
 		pool := db.NodePool{

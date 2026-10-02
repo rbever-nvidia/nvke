@@ -90,6 +90,23 @@ func TestUnit_NodePoolNodeSchedulerSkipsAutoProvisionDisabledNodePool(t *testing
 	database.AssertNotCalled(t, "ListNodes", mock.Anything, mock.Anything)
 }
 
+func TestUnit_NodePoolNodeSchedulerSkipsMachineDeploymentNodePool(t *testing.T) {
+	ctx := context.Background()
+	nodePoolID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	database := &testutil.MockDB{}
+	database.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{
+		ID:            nodePoolID,
+		LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+	}, nil).Once()
+
+	scheduler := NewNodePoolNodeScheduler(config.Config{}, slog.Default(), dbwrapper.New(database, slog.Default()), nil)
+	result, err := scheduler.Reconcile(ctx, dbreconcile.NodePoolKey(nodePoolID))
+	require.NoError(t, err)
+	require.Zero(t, result)
+	database.AssertExpectations(t)
+	database.AssertNotCalled(t, "ListNodes", mock.Anything, mock.Anything)
+}
+
 func expectProvisionWorkflow(t *testing.T, temporalClient *mockWorkflowStarter, nodeID uuid.UUID) {
 	t.Helper()
 	temporalClient.On("ExecuteWorkflow", mock.Anything, mock.MatchedBy(func(opts client.StartWorkflowOptions) bool {

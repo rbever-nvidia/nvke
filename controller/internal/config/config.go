@@ -327,6 +327,11 @@ type Config struct {
 	// provision control-plane nodes.
 	ProvisionControlPlaneWithControlPlaneController bool `env:"PROVISION_CONTROL_PLANE_WITH_CONTROL_PLANE_CONTROLLER" default:"true"`
 
+	// MachineDeploymentWorkersEnabled makes MachineDeployment the persisted
+	// lifecycle owner for newly created worker pools. Existing pools retain
+	// their stored lifecycle owner.
+	MachineDeploymentWorkersEnabled bool `env:"MACHINE_DEPLOYMENT_WORKERS_ENABLED" default:"false"`
+
 	// InstallCNIAfterInit installs CNI after kubeadm init, from a Debian package
 	// rather than a bundle server. It needs the charts package on the node, which
 	// Forge user-data installs as of #398.

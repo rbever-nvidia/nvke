@@ -159,6 +159,11 @@ func (a *Controller) reconcileNodePool(ctx context.Context, tx db.Tx, nodePool d
 		return nil
 	}
 
+	if nodePool.UsesMachineDeployment() {
+		logger.Debug("Node pool uses MachineDeployment lifecycle, skipping legacy node pool reconciliation")
+		return nil
+	}
+
 	// If the node pool is deleting, skip reconciliation.
 	if nodePool.Conditions.Deleting.Status == db.ConditionStatusTrue {
 		logger.Debug("Node pool is deleting, skipping node pool reconciliation")

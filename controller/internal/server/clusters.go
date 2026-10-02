@@ -436,7 +436,8 @@ func (s *clusterService) createInitialNodePools(ctx context.Context, tx db.Tx, c
 		}
 
 		s.applyNodePoolDefaults(&nodePoolReq, cluster)
-		dbNodePool, err := dbNodePoolFromAPI(&nodePoolReq, cluster.KubernetesVersion)
+		lifecycleMode := s.nodePoolService.nodePoolLifecycleMode(&nodePoolReq)
+		dbNodePool, err := dbNodePoolFromAPI(&nodePoolReq, cluster.KubernetesVersion, lifecycleMode)
 		if err != nil {
 			return fmt.Errorf("failed to convert node pool request: %w", err)
 		}
@@ -444,6 +445,10 @@ func (s *clusterService) createInitialNodePools(ctx context.Context, tx db.Tx, c
 		createdNodePool, err := tx.CreateNodePool(ctx, &dbNodePool)
 		if err != nil {
 			return fmt.Errorf("failed to create node pool: %w", err)
+		}
+		if createdNodePool.UsesMachineDeployment() {
+			// MachineDeployment worker pools are provisioned by the MachineDeploymentController, so we don't put the ProvisionNodePool workflow in the outbox.
+			continue
 		}
 
 		nodePoolWorkflowID := constants.ProvisionNodePoolWorkflowPrefix + createdNodePool.ID.String()

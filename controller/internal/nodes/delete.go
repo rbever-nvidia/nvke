@@ -224,6 +224,10 @@ func DeleteNodePoolWithTx(ctx context.Context, tx db.Tx, nodePoolID uuid.UUID) e
 		return fmt.Errorf("failed to update node pool: %w", err)
 	}
 
+	if dbNodePool.UsesMachineDeployment() {
+		return nil
+	}
+
 	workflowID := constants.TeardownNodePoolWorkflowPrefix + dbNodePool.ID.String()
 	if _, err = tx.CreateWorkflowOutboxEntry(ctx, "TeardownNodePool", workflowID, map[string]interface{}{
 		"nodePoolID": dbNodePool.ID,
