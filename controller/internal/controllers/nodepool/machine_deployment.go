@@ -86,6 +86,27 @@ func (a *machineDeploymentReconciler) deleteResources(ctx context.Context, nodeP
 		client.InNamespace(constants.NamespaceNKESystem),
 		client.MatchingLabels{constants.LabelKeyNodePoolID: nodePoolID.String()},
 	}
+	machineDeployments := &clusterv1.MachineDeploymentList{}
+	if err := a.k8sClient.List(
+		ctx,
+		machineDeployments,
+		client.InNamespace(constants.NamespaceNKESystem),
+		client.MatchingLabels{constants.LabelKeyNodePoolID: nodePoolID.String()},
+	); err != nil {
+		return fmt.Errorf("listing MachineDeployments for node pool %s: %w", nodePoolID, err)
+	}
+	for i := range machineDeployments.Items {
+		machineDeployment := &machineDeployments.Items[i]
+		if _, paused := machineDeployment.Annotations[clusterv1.PausedAnnotation]; !paused {
+			continue
+		}
+		base := machineDeployment.DeepCopy()
+		delete(machineDeployment.Annotations, clusterv1.PausedAnnotation)
+		if err := a.k8sClient.Patch(ctx, machineDeployment, client.MergeFrom(base)); err != nil {
+			return fmt.Errorf("unpausing MachineDeployment %s before deletion: %w", machineDeployment.Name, err)
+		}
+	}
+
 	objects := []client.Object{
 		&clusterv1.MachineDeployment{},
 		&nicov1.NicoMachineTemplate{},

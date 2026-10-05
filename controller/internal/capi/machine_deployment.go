@@ -293,6 +293,10 @@ func buildWorkerMachineDeployment(
 ) (*clusterv1.MachineDeployment, error) {
 	replicas := int32(nodePool.DesiredCount)
 	labels := nodePoolLabels(cluster.Name, nodePool.ID.String())
+	annotations := map[string]string{}
+	if nodePool.AutoProvisionDisabled {
+		annotations[clusterv1.PausedAnnotation] = "true"
+	}
 	return &clusterv1.MachineDeployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: clusterv1.GroupVersion.String(),
@@ -302,6 +306,7 @@ func buildWorkerMachineDeployment(
 			Name:      name,
 			Namespace: constants.NamespaceNKESystem,
 			Labels:    labels,
+			Annotations: annotations,
 		},
 		Spec: clusterv1.MachineDeploymentSpec{
 			ClusterName: cluster.Name,
