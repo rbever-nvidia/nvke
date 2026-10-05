@@ -23,6 +23,9 @@ metrics:
 serviceMonitor:
   enabled: false
 
+workers:
+  machineDeploymentEnabled: true
+
 livenessProbe:
   httpGet:
     path: /api/version

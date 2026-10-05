@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/dsx-ai-factory/nke/controller/api"
 	"github.com/dsx-ai-factory/nke/controller/internal/capi"
@@ -43,6 +44,7 @@ func newBadRequestErrorf(format string, args ...any) error {
 type nodePoolService struct {
 	logger      *slog.Logger
 	db          db.DB
+	k8sClient   ctrlclient.Client
 	teleportCfg config.TeleportConfig
 	providers   providerSupport
 	// useControlPlaneController mirrors the CWE feature flag
@@ -106,6 +108,9 @@ func (s *nodePoolService) ListNodePools(ctx context.Context, req api.ListNodePoo
 	apiNodePools := make([]api.NodePool, len(dbNodePools))
 	for i := range dbNodePools {
 		apiNodePools[i] = apiNodePoolFromDB(&dbNodePools[i])
+	}
+	if err := s.projectCurrentMachineSetIDs(ctx, dbNodePools, apiNodePools); err != nil {
+		return nil, err
 	}
 	return api.ListNodePools200JSONResponse{NodePools: apiNodePools}, nil
 }
@@ -262,8 +267,14 @@ func validateCloudInitFiles(files []api.CloudInitFile) error {
 }
 
 func (s *nodePoolService) validateCreateNodePoolRequest(cluster db.Cluster, req *api.CreateNodePoolRequest) error {
-	if err := naming.ValidateNodeNamePrefix(cluster.Name, req.NodeNamePrefix); err != nil {
-		return err
+	if s.nodePoolLifecycleMode(req) == db.NodePoolLifecycleModeMachineDeployment {
+		if err := naming.ValidateNodePoolName(cluster.Name, req.Name); err != nil {
+			return err
+		}
+	} else {
+		if err := naming.ValidateNodeNamePrefix(cluster.Name, req.NodeNamePrefix); err != nil {
+			return err
+		}
 	}
 
 	switch cluster.ProviderType {
@@ -343,7 +354,12 @@ func (s *nodePoolService) GetNodePool(ctx context.Context, req api.GetNodePoolRe
 		return nil, fmt.Errorf("failed to get node pool: %w", err)
 	}
 
-	return api.GetNodePool200JSONResponse(apiNodePoolFromDB(&dbNodePool)), nil
+	apiNodePool := apiNodePoolFromDB(&dbNodePool)
+	nodePools := []api.NodePool{apiNodePool}
+	if err := s.projectCurrentMachineSetIDs(ctx, []db.NodePool{dbNodePool}, nodePools); err != nil {
+		return nil, err
+	}
+	return api.GetNodePool200JSONResponse(nodePools[0]), nil
 }
 
 func (s *nodePoolService) DeleteNodePool(
@@ -788,6 +804,7 @@ func apiNodePoolFromDB(dbNodePool *db.NodePool) api.NodePool {
 	if dbNodePool.KubeReservedMemory != "" {
 		kubeReservedMemory = &dbNodePool.KubeReservedMemory
 	}
+	
 	return api.NodePool{
 		ID:                          dbNodePool.ID,
 		ClusterID:                   dbNodePool.ClusterID,

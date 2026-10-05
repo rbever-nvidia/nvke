@@ -1490,11 +1490,15 @@ components:
     NodeNamePrefix:
       type: string
       minLength: 1
+      deprecated: true
       description: |
-        Prefix for generated node names: `<cluster name>-<nodeNamePrefix>-<suffix>`.
+        Legacy node naming field. MachineDeployment-backed worker pools derive
+        node names from the node pool name and ignore this field.
+        Prefix for generated node names: <cluster name>-<nodeNamePrefix>-<suffix>.
         CWE assigns suffix as a 4-digit decimal number (0000–9999).
         Generated names must fit within 63 characters (Kubernetes Node name limit).
         Maximum prefix length depends on cluster name length.
+      x-go-type-skip-optional-pointer: true
 
     NodePoolCreateConfig:
       type: object
@@ -1504,7 +1508,6 @@ components:
       required:
         - name
         - desiredNodeCount
-        - nodeNamePrefix
       # See CreateClusterRequest for why this is spelled with `not` instead of `oneOf`.
       not:
         anyOf:
@@ -1525,6 +1528,8 @@ components:
           x-order: 1
         nodeNamePrefix:
           $ref: "#/components/schemas/NodeNamePrefix"
+          x-go-type-skip-optional-pointer: true
+          x-order: 2
         systemReservedMemory:
           type: string
           description: Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
@@ -1658,7 +1663,6 @@ components:
         - id
         - clusterID
         - name
-        - nodeNamePrefix
         - kubernetesVersion
         - controlPlane
         - nodeLabels
@@ -1685,9 +1689,9 @@ components:
           description: Node pool name. Unique within the cluster. Immutable.
           x-order: 3
         nodeNamePrefix:
-          allOf:
-            - $ref: "#/components/schemas/NodeNamePrefix"
-          description: Node names are `<cluster>-<prefix>-<NNNN>` (four-digit suffix), at most 63 characters in total.
+          $ref: "#/components/schemas/NodeNamePrefix"
+          x-go-type-skip-optional-pointer: true
+          x-order: 4
         kubernetesVersion:
           type: string
           description: Desired Kubernetes version for the pool's nodes. Inherits the cluster's version on create.

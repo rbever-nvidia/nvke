@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/dsx-ai-factory/nke/controller/api"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
@@ -20,6 +21,7 @@ type nodeSetService struct {
 	logger         *slog.Logger
 	db             db.DB
 	temporalClient client.Client
+	k8sClient      ctrlclient.Client
 }
 
 func NewNodeSetService(logger *slog.Logger, database db.DB, temporalClient client.Client) *nodeSetService {
@@ -40,11 +42,23 @@ func (s *nodeSetService) ListNodeSets(ctx context.Context, req api.ListNodeSetsR
 		return nil, fmt.Errorf("failed to list node sets: %w", err)
 	}
 
-	apiNodeSets := make([]api.NodeSet, len(dbNodeSets))
+	apiNodeSets := make([]api.NodeSet, 0, len(dbNodeSets))
 	for i := range dbNodeSets {
-		apiNodeSets[i], err = apiNodeSetFromDB(&dbNodeSets[i])
+		nodeSet, err := apiNodeSetFromDB(&dbNodeSets[i])
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert node set to API model: %w", err)
+		}
+		apiNodeSets = append(apiNodeSets, nodeSet)
+	}
+
+	machineSets, err := listMachineDeploymentMachineSets(ctx, s.k8sClient, req.Params.NodePoolID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range machineSets {
+		nodeSet := apiNodeSetFromMachineSet(&machineSets[i])
+		if nodeSet != nil {
+			apiNodeSets = append(apiNodeSets, *nodeSet)
 		}
 	}
 
@@ -54,10 +68,24 @@ func (s *nodeSetService) ListNodeSets(ctx context.Context, req api.ListNodeSetsR
 func (s *nodeSetService) GetNodeSet(ctx context.Context, req api.GetNodeSetRequestObject) (api.GetNodeSetResponseObject, error) {
 	dbNodeSet, err := s.db.GetNodeSet(ctx, req.NodeSetID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return api.GetNodeSet404Response{}, nil
+		if !errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("failed to get node set: %w", err)
 		}
-		return nil, fmt.Errorf("failed to get node set: %w", err)
+		machineSets, listErr := listMachineDeploymentMachineSets(ctx, s.k8sClient, nil)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for i := range machineSets {
+			if string(machineSets[i].UID) != req.NodeSetID.String() {
+				continue
+			}
+			nodeSet := apiNodeSetFromMachineSet(&machineSets[i])
+			if nodeSet == nil {
+				return api.GetNodeSet404Response{}, nil
+			}
+			return api.GetNodeSet200JSONResponse(*nodeSet), nil
+		}
+		return api.GetNodeSet404Response{}, nil
 	}
 
 	apiNodeSet, err := apiNodeSetFromDB(&dbNodeSet)

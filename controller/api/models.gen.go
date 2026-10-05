@@ -23,12 +23,6 @@ const (
 	ConditionStatusUnknown ConditionStatus = "Unknown"
 )
 
-// Defines values for CreateClusterRequestCniPlugin.
-const (
-	CreateClusterRequestCniPluginCalico        CreateClusterRequestCniPlugin = "calico"
-	CreateClusterRequestCniPluginOvnKubernetes CreateClusterRequestCniPlugin = "ovn-kubernetes"
-)
-
 // Defines values for DiskSelectionStrategy.
 const (
 	DiskSelectionStrategyLargest  DiskSelectionStrategy = "largest"
@@ -49,7 +43,7 @@ const (
 	UpdateInProgressTypeOidcEnable       UpdateInProgressType = "oidc_enable"
 )
 
-// CloudInitFile A file written by cloud-init on CAPI-backed nodes.
+// CloudInitFile defines model for CloudInitFile.
 type CloudInitFile struct {
 	// Content File contents written by cloud-init.
 	Content string `json:"content"`
@@ -64,203 +58,194 @@ type CloudInitFile struct {
 	Permissions *string `json:"permissions,omitempty"`
 }
 
-// Cluster A Kubernetes cluster. Holds the Kubernetes version, network, CNI, etcd
-// encryption, control-plane configuration and conditions.
+// Cluster defines model for Cluster.
 type Cluster struct {
-	// ID Cluster ID.
+	// ID The ID of the cluster
 	ID openapi_types.UUID `json:"id"`
 
-	// Name Cluster name.
+	// Name The name of the cluster
 	Name string `json:"name"`
 
-	// ControlPlaneKubernetesVersion Desired control-plane Kubernetes version. The running version is in ControlPlaneStatus.
+	// ControlPlaneKubernetesVersion The version of Kubernetes used by the cluster
 	ControlPlaneKubernetesVersion string `json:"controlPlaneKubernetesVersion"`
 
-	// CniPlugin CNI plugin.
+	// CniPlugin The CNI plugin used by the cluster
 	CniPlugin string `json:"cniPlugin"`
 
-	// CniVersion CNI version.
+	// CniVersion The CNI package/chart stream used by the cluster
 	CniVersion string `json:"cniVersion"`
 
-	// EtcdEncrypted Whether etcd is encrypted at rest.
+	// EtcdEncrypted Enable or disable etcd encryption for the cluster
 	EtcdEncrypted bool `json:"etcdEncrypted"`
 
-	// ControlPlaneVIP API server VIP, if configured.
+	// ControlPlaneVIP The VIP configured for access to the control plane
 	ControlPlaneVIP *string `json:"controlPlaneVIP,omitempty"`
 
-	// EnableCPNodeRecycling When true, control-plane upgrades and configuration changes replace nodes
-	// automatically. When false, nodes needing replacement are reported as pending and
-	// wait for an operator.
+	// EnableCPNodeRecycling Enable or disable control plane node recycling during version upgrades. When enabled, the cluster can upgrade control plane nodes by creating new nodes with the target version and removing old nodes. When disabled, old nodes are not recycled.
 	EnableCPNodeRecycling *bool `json:"enableCPNodeRecycling,omitempty"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for nodes in this cluster.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 
-	// Conditions Lifecycle conditions.
+	// Conditions Conditions representing various aspects of the Cluster's state
 	Conditions ClusterConditions `json:"conditions"`
 
-	// ControlPlaneConfig Current control-plane configuration.
+	// ControlPlaneConfig Cluster-level control plane configuration.
 	ControlPlaneConfig *ControlPlaneConfig `json:"controlPlaneConfig,omitempty"`
 
-	// CreatedAt Creation time.
+	// CreatedAt When the cluster was created
 	CreatedAt time.Time `json:"createdAt"`
 
-	// Infra Infra provider fields.
-	Infra *InfraClusterProvider `json:"infra,omitempty"`
+	// Infra CAPI infrastructure fields for a cluster: the caller supplies the CAPI manifests
+	// directly. Not to be used merely because a cluster is provisioned through CAPI —
+	// `nico` clusters may be too. Mutually exclusive with `nico`.
+	Infra   *InfraClusterProvider `json:"infra,omitempty"`
+	Network ClusterNetwork        `json:"network"`
 
-	// Network Pod and service network.
-	Network ClusterNetwork `json:"network"`
-
-	// Nico NICo identifiers.
+	// Nico Nico identity fields for a cluster. Mutually exclusive with `infra`.
 	Nico *NicoClusterProvider `json:"nico,omitempty"`
 }
 
-// ClusterConditions Lifecycle conditions of a cluster. Each is a Condition.
+// ClusterConditions Conditions representing various aspects of the Cluster's state
 type ClusterConditions struct {
-	// ControlPlaneUpgrading The control plane is being upgraded.
 	ControlPlaneUpgrading *Condition `json:"controlPlaneUpgrading,omitempty"`
+	CpNodesRecycling      *Condition `json:"cpNodesRecycling,omitempty"`
+	Deleting              Condition  `json:"deleting"`
+	Provisioned           Condition  `json:"provisioned"`
+	Provisioning          Condition  `json:"provisioning"`
+	UpdateFailed          *Condition `json:"updateFailed,omitempty"`
 
-	// CpNodesRecycling Control-plane nodes are being replaced.
-	CpNodesRecycling *Condition `json:"cpNodesRecycling,omitempty"`
-
-	// Deleting The cluster is being deleted.
-	Deleting Condition `json:"deleting"`
-
-	// Provisioned The cluster is provisioned.
-	Provisioned Condition `json:"provisioned"`
-
-	// Provisioning The cluster is provisioning.
-	Provisioning Condition `json:"provisioning"`
-
-	// UpdateFailed The most recent cluster update failed.
-	UpdateFailed *Condition `json:"updateFailed,omitempty"`
-
-	// UpdateInProgress The mutually exclusive cluster operation in progress, if any. Absent when none.
+	// UpdateInProgress A mutually-exclusive cluster mutation in flight.
 	UpdateInProgress *UpdateInProgress `json:"updateInProgress,omitempty"`
 }
 
 // ClusterControlPlane Read-only view of a cluster's control plane: its persisted configuration
 // plus an aggregate runtime status.
 type ClusterControlPlane struct {
-	// Config The persisted control-plane configuration.
+	// Config Cluster-level control plane configuration.
 	Config ControlPlaneConfig `json:"config"`
 
-	// Status Aggregate runtime status.
+	// Status Aggregate runtime status of a cluster's control plane.
 	Status ControlPlaneStatus `json:"status"`
 }
 
-// ClusterNetwork Pod and service network in effect. Both fields are always present.
+// ClusterNetwork defines model for ClusterNetwork.
 type ClusterNetwork struct {
-	// PodCIDR Comma-separated IPv4 pod CIDRs in effect.
+	// PodCIDR Canonical comma-separated IPv4 pod network CIDRs applied to the cluster.
 	PodCIDR string `json:"podCIDR"`
 
-	// ServiceCIDR IPv4 service CIDR in effect.
+	// ServiceCIDR Canonical IPv4 service network CIDR applied to the cluster.
 	ServiceCIDR string `json:"serviceCIDR"`
 }
 
-// ClusterNetworkCreateConfig Pod and service network. Immutable after creation. Defaults apply when omitted.
+// ClusterNetworkCreateConfig Non-default pod or service CIDRs are supported only with the ovn-kubernetes CNI plugin.
 type ClusterNetworkCreateConfig struct {
-	// PodCIDR Comma-separated IPv4 pod CIDRs. Each must be private, with a prefix length from
-	// /12 to /23, and must not overlap the others or the service CIDR. Must have room
-	// for a /24 per desired node plus surge. Default 192.168.0.0/16.
+	// PodCIDR Comma-separated IPv4 pod network CIDRs. Each CIDR must be a private range with a prefix
+	// length between /12 and /23 and must not overlap another pod CIDR or the serviceCIDR.
+	// NKE allocates a /24 block to each node. The ranges together must provide enough blocks for all
+	// desired nodes plus configured surge capacity, or at least one spare block when surge is
+	// zero. The same capacity rule applies when node pools are created or scaled.
+	// Defaults to 192.168.0.0/16; a non-default value requires the ovn-kubernetes CNI plugin.
 	PodCIDR string `json:"podCIDR,omitempty"`
 
-	// ServiceCIDR IPv4 service CIDR, private, /12 to /24. Default 10.96.0.0/12.
+	// ServiceCIDR IPv4 service network CIDR. Must be a private range with a prefix length between /12 and /24. Defaults to 10.96.0.0/12; a non-default value requires the ovn-kubernetes CNI plugin.
 	ServiceCIDR string `json:"serviceCIDR,omitempty"`
 }
 
-// Condition A status, when it last changed, and a message.
+// Condition defines model for Condition.
 type Condition struct {
-	// Status Condition status.
+	// Status The status of the condition
 	Status ConditionStatus `json:"status"`
 
-	// LastTransitionTime When the status last changed.
+	// LastTransitionTime The last time the condition transitioned
 	LastTransitionTime time.Time `json:"lastTransitionTime"`
 
-	// Message Human-readable detail. May be empty.
+	// Message A message explaining the condition
 	Message string `json:"message"`
 }
 
-// ConditionStatus Condition status.
+// ConditionStatus The status of the condition
 type ConditionStatus string
 
-// ConfigProfile A config profile available to the management plane.
+// ConfigProfile defines model for ConfigProfile.
 type ConfigProfile struct {
 	// Name The name of the config profile
 	Name string `json:"name"`
 }
 
-// ControlPlaneConfig The control-plane configuration in effect.
+// ControlPlaneConfig Cluster-level control plane configuration.
 type ControlPlaneConfig struct {
-	// ConfigurationID ID of the current configuration snapshot.
+	// ConfigurationID The ID of the current control plane configuration snapshot revision.
 	ConfigurationID openapi_types.UUID `json:"configurationId,omitempty"`
 
-	// DesiredCount The desired number of cluster-level control plane nodes. Creating a cluster with or increasing this count above 1 requires controlPlaneVIP on the cluster.
+	// DesiredCount The desired number of cluster-level control plane nodes.
 	DesiredCount int `json:"desiredCount,omitempty"`
 
-	// Infra Infra provider control plane fields.
+	// Infra Infra provider fields for cluster-level control plane configuration. Mutually exclusive with `nico`.
 	Infra *InfraControlPlaneProvider `json:"infra,omitempty"`
 
-	// MaxSurge Extra control-plane nodes allowed during a rollout (0 or 1).
+	// MaxSurge Cluster-level surge capacity for control plane nodes during upgrades.
 	MaxSurge *int `json:"maxSurge,omitempty"`
 
-	// Nico NICo settings for control-plane nodes.
+	// Nico The stored Nico cluster-level control plane fields, as reported on read.
+	// Requests use `NicoControlPlaneProviderCreate` and `NicoControlPlaneProviderUpdate`,
+	// which omit the fields that direction cannot set. Mutually exclusive with `infra`.
 	Nico *NicoControlPlaneProvider `json:"nico,omitempty"`
 
-	// NodeLabels Labels applied to control-plane nodes, as key=value.
+	// NodeLabels A list of labels applied to control plane nodes.
 	NodeLabels []string `json:"nodeLabels,omitempty"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not replaced automatically.
+	// ProvisioningMonitorDisabled When true, the timeout-based provisioning monitor is paused for cluster-level
+	// control plane nodes.
 	ProvisioningMonitorDisabled *bool `json:"provisioningMonitorDisabled,omitempty"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes on control plane nodes (e.g., "16Gi").
 	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for control plane nodes.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// ControlPlaneConfigChange One control-plane configuration snapshot and what changed in it.
+// ControlPlaneConfigChange defines model for ControlPlaneConfigChange.
 type ControlPlaneConfigChange struct {
-	// ChangeReason Why the snapshot was created, when recorded.
+	// ChangeReason A human-readable reason the snapshot was created, when recorded.
 	ChangeReason string `json:"changeReason,omitempty"`
 
-	// ChangedFields Fields that changed relative to the previous snapshot. Empty for the first entry.
+	// ChangedFields Fields that changed relative to the previous snapshot. Empty for the initial snapshot.
 	ChangedFields []ControlPlaneConfigField `json:"changedFields"`
 
-	// ConfigurationID The configuration snapshot.
+	// ConfigurationID The ID of the control-plane configuration snapshot representing this config.
 	ConfigurationID openapi_types.UUID `json:"configurationID"`
 
-	// CreatedAt When the change took effect.
+	// CreatedAt When this config snapshot was created (i.e. when the config change took effect).
 	CreatedAt time.Time `json:"createdAt"`
 
 	// CreatedBy Who created the snapshot, when recorded.
 	CreatedBy string `json:"createdBy,omitempty"`
 
-	// IsCurrent Whether this is the cluster's current desired configuration.
+	// IsCurrent Whether this snapshot is the cluster's current desired control-plane configuration.
 	IsCurrent bool `json:"isCurrent"`
 }
 
-// ControlPlaneConfigField One field that changed between two snapshots. Values are JSON-encoded.
+// ControlPlaneConfigField defines model for ControlPlaneConfigField.
 type ControlPlaneConfigField struct {
-	// Field The field that changed.
+	// Field The name of the config field that changed.
 	Field string `json:"field"`
 
-	// From JSON-encoded previous value. Omitted for the first entry.
+	// From The previous value, JSON-encoded. Omitted for the initial snapshot.
 	From *string `json:"from,omitempty"`
 
-	// To JSON-encoded new value.
+	// To The new value, JSON-encoded.
 	To string `json:"to"`
 }
 
-// ControlPlaneConfigHistory Ordered snapshots of control-plane configuration changes.
+// ControlPlaneConfigHistory defines model for ControlPlaneConfigHistory.
 type ControlPlaneConfigHistory struct {
-	// Changes Oldest first. A node's pinnedConfigurationID and the cluster's desired
-	// configurationId both refer to entries here.
+	// Changes Control-plane configuration snapshots ordered from oldest to newest. Each entry after the first shows which rollout-relevant fields changed relative to the previous snapshot. A node's pinnedConfigurationID and the cluster's desired configurationID both refer to entries here.
 	Changes []ControlPlaneConfigChange `json:"changes"`
 }
 
-// ControlPlaneRolloutChange One rollout-relevant field whose pinned value differs from the desired value, as plain strings.
+// ControlPlaneRolloutChange A single rollout-relevant field whose pinned value differs from desired.
 type ControlPlaneRolloutChange struct {
 	// Field The rollout-relevant field that changed (e.g. kubernetesVersion, osProfile, configProfile).
 	Field string `json:"field"`
@@ -272,140 +257,137 @@ type ControlPlaneRolloutChange struct {
 	To string `json:"to"`
 }
 
-// ControlPlaneRolloutStatus Control-plane nodes only. Drift is computed on the OS profile (osProfile) and
-// the Kubernetes version. Resolve pinnedConfigurationID and desiredConfigurationID
-// with GET /clusters/{clusterID}/control-plane/configHistory.
+// ControlPlaneRolloutStatus Read-only, derived rollout state for a control-plane-controller-managed node. pending is computed exactly as the control-plane controller computes it: the node needs rollout when its pinned snapshot differs from the cluster's desired snapshot in the OS profile, config profile, or Kubernetes version. The pinned and desired snapshots themselves are resolvable in full (change reason, author, timestamp) from pinnedConfigurationID and desiredConfigurationID via GET /clusters/{clusterID}/control-plane/configHistory.
 type ControlPlaneRolloutStatus struct {
-	// Pending The node differs from the desired configuration.
+	// Pending True when the node's pinned configuration differs from the cluster's desired configuration in a field that requires recycling the node.
 	Pending bool `json:"pending"`
 
-	// Actionable The node can be replaced now.
+	// Actionable True when the drift is pending and the control-plane controller will currently act on it (the cluster has control-plane node recycling enabled). False means either there is no drift, or the drift is detected but gated — recycling is disabled, so an operator must act.
 	Actionable bool `json:"actionable"`
 
-	// Changes Each with field, from, to as plain strings. Drift is computed on the OS profile (osProfile) and the Kubernetes version.
+	// Changes The rollout-relevant fields whose pinned value differs from desired, each as field/from/to. Empty when the node is up to date. Lets clients render the drift generically without enumerating fields.
 	Changes []ControlPlaneRolloutChange `json:"changes,omitempty"`
 
-	// PinnedConfigurationID Configuration the node was built from.
+	// PinnedConfigurationID The ID of the control-plane configuration snapshot the node is pinned to. Use GET /clusters/{clusterID}/control-plane/configHistory to resolve the full snapshot (change reason, author, timestamp).
 	PinnedConfigurationID openapi_types.UUID `json:"pinnedConfigurationID,omitempty"`
 
-	// DesiredConfigurationID Configuration the node should move to.
+	// DesiredConfigurationID The ID of the cluster's current desired control-plane configuration snapshot.
 	DesiredConfigurationID openapi_types.UUID `json:"desiredConfigurationID,omitempty"`
 }
 
-// ControlPlaneRolloutSummary Rollout progress of the control plane. The three node counts are mutually
-// exclusive and sum to managedNodeCount.
+// ControlPlaneRolloutSummary Cluster-level rollout rollup for a control-plane-controller-managed control plane: how many managed control-plane nodes are up to date, still pending, and currently rolling out, whether a rollout is in progress, and whether pending drift will be reconciled automatically. The three node counts are mutually exclusive and sum to managedNodeCount. Present only for clusters whose control plane is managed by the control-plane controller.
 type ControlPlaneRolloutSummary struct {
-	// ManagedNodeCount Control-plane nodes under management.
+	// ManagedNodeCount Number of control-plane nodes managed by the control-plane controller.
 	ManagedNodeCount int `json:"managedNodeCount"`
 
-	// UpToDateNodeCount Nodes on the desired configuration.
+	// UpToDateNodeCount Number of managed control-plane nodes that have converged to the cluster's desired configuration and are Ready (pinned configuration matches desired and kubernetesReady is True).
 	UpToDateNodeCount int `json:"upToDateNodeCount"`
 
-	// PendingNodeCount Nodes waiting to be replaced.
+	// PendingNodeCount Number of managed control-plane nodes whose pinned configuration has drifted and need recycling.
 	PendingNodeCount int `json:"pendingNodeCount"`
 
-	// InProgressNodeCount Nodes being replaced. The three counts sum to managedNodeCount.
+	// InProgressNodeCount Number of managed control-plane nodes that already carry the desired configuration but are not yet Ready (a recycle in flight). These are neither pending nor up to date until they become Ready.
 	InProgressNodeCount int `json:"inProgressNodeCount"`
 
-	// InProgress A rollout is running.
+	// InProgress True when a control-plane node recycle is currently underway.
 	InProgress bool `json:"inProgress"`
 
-	// RecyclingEnabled When false, pending nodes are detected but wait for an operator.
+	// RecyclingEnabled True when control-plane node recycling is enabled for the cluster, so the control-plane controller reconciles pending drift automatically. When false, pending nodes are detected but gated and require an operator.
 	RecyclingEnabled bool `json:"recyclingEnabled"`
 }
 
 // ControlPlaneStatus Aggregate runtime status of a cluster's control plane.
 type ControlPlaneStatus struct {
-	// NodeCount Total control-plane nodes, including surge nodes.
+	// NodeCount Total number of control-plane nodes for the cluster.
 	NodeCount int `json:"nodeCount"`
 
-	// ReadyNodeCount Control-plane nodes reporting Kubernetes Ready.
+	// ReadyNodeCount Number of control-plane nodes currently reporting Kubernetes-ready.
 	ReadyNodeCount int `json:"readyNodeCount"`
 
-	// KubernetesVersion Current running control-plane Kubernetes version.
+	// KubernetesVersion The current control-plane Kubernetes version.
 	KubernetesVersion string `json:"kubernetesVersion"`
 
-	// DeletingNodeCount Control-plane nodes being torn down. Deletes are serialized, so this is at most 1.
-	DeletingNodeCount int `json:"deletingNodeCount"`
-
-	// ControlPlaneUpgrading The control plane is being upgraded.
+	// DeletingNodeCount Number of control-plane nodes whose teardown is in flight. Control-plane
+	// deletes are serialized, so this is at most 1.
+	DeletingNodeCount     int       `json:"deletingNodeCount"`
 	ControlPlaneUpgrading Condition `json:"controlPlaneUpgrading"`
+	CpNodesRecycling      Condition `json:"cpNodesRecycling"`
 
-	// CpNodesRecycling Control-plane nodes are being replaced.
-	CpNodesRecycling Condition `json:"cpNodesRecycling"`
-
-	// DeleteRequestedNodeCount Control-plane nodes with an accepted delete that has not started.
+	// DeleteRequestedNodeCount Number of control-plane nodes with an accepted delete whose teardown has
+	// not started yet, because it is queued behind the in-flight one.
 	DeleteRequestedNodeCount int `json:"deleteRequestedNodeCount"`
 
-	// Rollout Rollout progress.
+	// Rollout Cluster-level rollout rollup for a control-plane-controller-managed control plane: how many managed control-plane nodes are up to date, still pending, and currently rolling out, whether a rollout is in progress, and whether pending drift will be reconciled automatically. The three node counts are mutually exclusive and sum to managedNodeCount. Present only for clusters whose control plane is managed by the control-plane controller.
 	Rollout *ControlPlaneRolloutSummary `json:"rollout,omitempty"`
 }
 
 // CreateClusterControlPlaneConfig Writable cluster-level control plane configuration supplied at cluster creation.
-// Required when you create a cluster.
-// `nico` carries the NICo settings for the control-plane nodes; it is required
-// for a NICo cluster.
+// Exactly one provider payload is required: supply either `nico` or `infra`.
+// A request carrying both, or neither, is rejected with 400.
 type CreateClusterControlPlaneConfig struct {
-	// DesiredCount The desired number of cluster-level control plane nodes. Must be at least 1. Values above 1 require controlPlaneVIP on the cluster.
+	// DesiredCount The desired number of cluster-level control plane nodes. Must be at least 1.
 	DesiredCount int `json:"desiredCount"`
 
 	// Infra Infra provider fields for cluster-level control plane configuration. Mutually exclusive with `nico`.
 	Infra *InfraControlPlaneProvider `json:"infra,omitempty"`
 
-	// MaxSurge Extra control-plane nodes allowed during a rollout (0 or 1).
+	// MaxSurge Cluster-level surge capacity for control plane nodes during upgrades (max 1).
 	MaxSurge *int `json:"maxSurge,omitempty"`
 
-	// Nico NICo settings for control-plane nodes at creation. osProfile and configProfile
-	// are required, and exactly one of subnetIDs and vpcPrefixIDs.
+	// Nico The settable subset of the Nico control plane fields.
 	Nico *NicoControlPlaneProviderCreate `json:"nico,omitempty"`
 
-	// NodeLabels Labels applied to control-plane nodes, as key=value.
+	// NodeLabels A list of labels to apply to control plane nodes.
 	NodeLabels []string `json:"nodeLabels,omitempty"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not replaced automatically.
+	// ProvisioningMonitorDisabled When true, the timeout-based provisioning monitor is paused for control plane nodes.
 	ProvisioningMonitorDisabled *bool `json:"provisioningMonitorDisabled,omitempty"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes on control plane nodes (e.g., "16Gi").
 	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for control plane nodes. When omitted, the server-side default for the site is applied.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// CreateClusterRequest A cluster and, optionally, its initial node pools. The provider payload is
-// fixed at creation.
+// CreateClusterRequest Exactly one provider payload is required: supply either `nico` or `infra`.
+// A request carrying both, or neither, is rejected with 400.
 type CreateClusterRequest struct {
-	// Name Cluster name. Lowercase DNS label, unique per management plane. Node names are derived from it.
+	// Name The name of the cluster. Must be a lowercase DNS label, because CWE derives the names of the cluster's CAPI resources and its node names from it.
 	Name string `json:"name"`
 
-	// ControlPlaneKubernetesVersion Kubernetes version for the cluster, as X.Y.Z with no leading "v".
+	// ControlPlaneKubernetesVersion The version of Kubernetes to use for the cluster.
+	// Must be a valid semver version core (X.Y.Z only, e.g. 1.29.7).
+	// Must not include a leading "v".
+	// The pattern is the version-core part of the regex from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
 	ControlPlaneKubernetesVersion string `json:"controlPlaneKubernetesVersion"`
 
-	// CniPlugin CNI plugin. Supported values are calico and ovn-kubernetes.
-	CniPlugin CreateClusterRequestCniPlugin `json:"cniPlugin"`
+	// CniPlugin The CNI plugin to use for the cluster
+	CniPlugin string `json:"cniPlugin"`
 
-	// CniVersion CNI version, as X.Y.Z. Defaults to 3.30.1 for calico or 1.4.0 for ovn-kubernetes.
+	// CniVersion The CNI package/chart stream to use for the selected CNI plugin.
+	// Optional for backwards compatibility; when omitted, the server defaults by cniPlugin.
+	// Must be a valid semver version core (X.Y.Z only) and must not include a leading "v".
 	CniVersion *string `json:"cniVersion,omitempty"`
 
-	// EtcdEncrypted Encrypt etcd at rest. Can be turned on later with `enableEtcdEncryption`; cannot be turned off.
+	// EtcdEncrypted Enable or disable etcd encryption for the cluster
 	EtcdEncrypted bool `json:"etcdEncrypted"`
 
-	// ControlPlaneVIP Virtual IP for the API server through kube-vip. Omit to skip kube-vip and
-	// use the first control-plane node's IP as the API server endpoint. Must not
-	// fall inside the pod or service CIDR. An explicit empty string is rejected.
-	// Without a VIP, a new cluster must have exactly one desired control-plane
-	// node. Control-plane scale-up above one node, upgrades, and configuration
-	// changes that replace control-plane nodes require a VIP. Recreate a no-VIP
-	// cluster with controlPlaneVIP to make those operations available.
+	// ControlPlaneVIP Optional kube-vip control-plane VIP desired state. When provided,
+	// CWE stores this address on the cluster and configures kube-vip
+	// during provisioning. When omitted, CWE stores no control-plane VIP,
+	// skips kube-vip configuration, and kubeadm uses the first control-plane
+	// node IP as the API server endpoint. Callers are responsible for
+	// choosing a non-conflicting VIP. Omit this field to skip kube-vip;
+	// an explicit empty string is rejected.
 	ControlPlaneVIP string `json:"controlPlaneVIP,omitempty"`
 
 	// TeleportEnabled Enable Teleport SSH enrollment for nodes in this cluster. When omitted, the server-side default for the site is applied.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 
 	// ControlPlaneConfig Writable cluster-level control plane configuration supplied at cluster creation.
-	// Required when you create a cluster.
-	// `nico` carries the NICo settings for the control-plane nodes; it is required
-	// for a NICo cluster.
+	// Exactly one provider payload is required: supply either `nico` or `infra`.
+	// A request carrying both, or neither, is rejected with 400.
 	ControlPlaneConfig *CreateClusterControlPlaneConfig `json:"controlPlaneConfig,omitempty"`
 
 	// Infra CAPI infrastructure fields for a cluster: the caller supplies the CAPI manifests
@@ -413,94 +395,93 @@ type CreateClusterRequest struct {
 	// `nico` clusters may be too. Mutually exclusive with `nico`.
 	Infra *InfraClusterProvider `json:"infra,omitempty"`
 
-	// Network Pod and service network. Immutable after creation. Defaults apply when omitted.
+	// Network Non-default pod or service CIDRs are supported only with the ovn-kubernetes CNI plugin.
 	Network *ClusterNetworkCreateConfig `json:"network,omitempty"`
 
-	// Nico NICo identifiers for the cluster. Fixed at creation.
+	// Nico Nico identity fields for a cluster. Mutually exclusive with `infra`.
 	Nico *NicoClusterProvider `json:"nico,omitempty"`
 
-	// NodePools Initial worker node pools.
+	// NodePools The initial set of node pools to create for the cluster
 	NodePools *[]NodePoolCreateConfig `json:"nodePools,omitempty"`
 }
 
-// CreateClusterRequestCniPlugin CNI plugin. Supported values are calico and ovn-kubernetes.
-type CreateClusterRequestCniPlugin string
-
 // CreateNodePoolRequest defines model for CreateNodePoolRequest.
 type CreateNodePoolRequest struct {
-	// ClusterID Parent cluster.
+	// ClusterID The ID of the cluster that will own the node pool
 	ClusterID openapi_types.UUID `json:"clusterID"`
 
-	// Name Unique within the cluster. Immutable.
+	// Name The name of the node pool (must conform to Kubernetes resource naming standards)
 	Name string `json:"name"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes (e.g., "16Gi", "128Gi")
 	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
 
-	// KubeReservedMemory Memory reserved for Kubernetes components. Default 2Gi.
+	// KubeReservedMemory The amount of memory to reserve for Kubernetes processes (e.g., "2Gi", "250Mi"). When unset, the kubelet configuration patch uses its default (2Gi).
 	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
 
 	// ControlPlane Whether the nodes in this pool should be added as Kubernetes control plane nodes
 	ControlPlane bool `json:"controlPlane,omitempty"`
 
-	// NodeLabels Labels applied to the pool's nodes, as key=value. Set at creation.
+	// NodeLabels A list of labels for the nodes in the pool
 	NodeLabels *[]string `json:"nodeLabels,omitempty"`
 
-	// DesiredNodeCount The desired number of nodes in the pool. For control-plane pools, aggregate capacity above 1 requires controlPlaneVIP on the cluster.
+	// DesiredNodeCount The desired number of nodes in the pool
 	DesiredNodeCount int `json:"desiredNodeCount"`
 
-	// Description Free-text description.
+	// Description An optional description for the node pool.
 	Description *string `json:"description,omitempty"`
 
-	// AutoProvisionDisabled Disables automatic provisioning for the pool.
+	// AutoProvisionDisabled Whether the node pool is disabled for auto-provisioning.
 	AutoProvisionDisabled *bool `json:"autoProvisionDisabled,omitempty"`
 
 	// Infra Infra provider fields for a node pool. Mutually exclusive with `nico`.
 	Infra *InfraNodePoolProvider `json:"infra,omitempty"`
 
-	// Nico NICo settings for a node pool. instanceTypeID, osProfile and configProfile are
-	// required, and exactly one of subnetIDs and vpcPrefixIDs.
+	// Nico Nico fields for a node pool. Mutually exclusive with `infra`.
 	Nico *NicoNodePoolProvider `json:"nico,omitempty"`
 
-	// NodeNamePrefix Prefix for generated node names: `<cluster name>-<nodeNamePrefix>-<suffix>`.
+	// NodeNamePrefix Legacy node naming field. MachineDeployment-backed worker pools derive
+	// node names from the node pool name and ignore this field.
+	// Prefix for generated node names: <cluster name>-<nodeNamePrefix>-<suffix>.
 	// CWE assigns suffix as a 4-digit decimal number (0000–9999).
 	// Generated names must fit within 63 characters (Kubernetes Node name limit).
 	// Maximum prefix length depends on cluster name length.
-	NodeNamePrefix NodeNamePrefix `json:"nodeNamePrefix"`
+	// Deprecated:
+	NodeNamePrefix NodeNamePrefix `json:"nodeNamePrefix,omitempty"`
 
-	// AutoModeDisabled Disables auto-mode (automatic node recycling).
+	// AutoModeDisabled Whether the node pool is disabled for auto-mode (automatic node recycling).
 	AutoModeDisabled *bool `json:"autoModeDisabled,omitempty"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not recycled automatically.
+	// ProvisioningMonitorDisabled Whether the timeout-based provisioning monitor is paused for this node pool. When true, nodes stuck in provisioning past the configured timeout will not be recycled by the system; an operator must investigate manually.
 	ProvisioningMonitorDisabled *bool `json:"provisioningMonitorDisabled,omitempty"`
 
-	// RecycleBudget Maximum number of nodes recycled at once.
+	// RecycleBudget The maximum number of nodes that can be recycled at once.
 	RecycleBudget *int `json:"recycleBudget,omitempty"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for nodes in this pool. When omitted, the server-side default for the site is applied based on pool role.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// DeleteNodeRequest Optional body of a node delete.
+// DeleteNodeRequest defines model for DeleteNodeRequest.
 type DeleteNodeRequest struct {
-	// ForceUnreachable Treat the node as unreachable: graceful drain and shutdown are attempted, and
-	// failures are tolerated. Failures removing a control-plane node's etcd member are
-	// not tolerated.
-	ForceUnreachable bool `json:"forceUnreachable,omitempty"`
-
-	// MachineHealthIssue Flags the underlying machine for repair.
+	// ForceUnreachable Treat the node as unreachable. Best-effort graceful steps (drain, graceful
+	// shutdown) are still attempted, but their failures are logged and tolerated
+	// instead of failing the teardown. Use when a node's kubelet/node-agent is
+	// unresponsive and a normal delete would hang. This does not tolerate
+	// control-plane etcd member-removal failures.
+	ForceUnreachable   bool                `json:"forceUnreachable,omitempty"`
 	MachineHealthIssue *MachineHealthIssue `json:"machineHealthIssue,omitempty"`
 }
 
-// DiskSelectionStrategy Which disk the OS is installed on. Default smallest.
+// DiskSelectionStrategy The strategy to use for selecting the OS install disk on nodes.
 type DiskSelectionStrategy string
 
-// DiskSelectionStrategyCreate Which disk the OS is installed on. Default smallest.
+// DiskSelectionStrategyCreate The strategy to use for selecting the OS install disk on nodes.
 type DiskSelectionStrategyCreate string
 
-// GenericError Error response body.
+// GenericError defines model for GenericError.
 type GenericError struct {
-	// Message What went wrong.
+	// Message The error message
 	Message string `json:"message"`
 }
 
@@ -526,7 +507,6 @@ type InfraControlPlaneProvider struct {
 
 // InfraControlPlaneProviderUpdate The mutable infra provider control plane fields. Every field carries three states: omitted
 // leaves the stored value alone, a value replaces it, and an empty value clears it.
-// Mutually exclusive with `nico`: a request carrying both is rejected with 400.
 type InfraControlPlaneProviderUpdate struct {
 	// BootstrapFiles Cloud-init write_files entries for CAPI-backed control plane nodes
 	BootstrapFiles []CloudInitFile `json:"bootstrapFiles,omitempty"`
@@ -552,7 +532,6 @@ type InfraNodePoolProvider struct {
 
 // InfraNodePoolProviderUpdate The mutable infra provider node pool fields. Every field carries three states: omitted
 // leaves the stored value alone, a value replaces it, and an empty value clears it.
-// Mutually exclusive with `nico`: a request carrying both is rejected with 400.
 type InfraNodePoolProviderUpdate struct {
 	// BootstrapFiles Cloud-init write_files entries for CAPI-backed nodes
 	BootstrapFiles []CloudInitFile `json:"bootstrapFiles,omitempty"`
@@ -576,653 +555,671 @@ type InfraNodeSetProvider struct {
 	PreKubeadmCommands []string `json:"preKubeadmCommands,omitempty"`
 }
 
-// ListClustersResponse A list of clusters.
+// ListCNIPluginsResponse defines model for ListCNIPluginsResponse.
+type ListCNIPluginsResponse struct {
+	// CniPlugins A list of CNI plugins
+	CniPlugins []string `json:"cniPlugins"`
+}
+
+// ListClustersResponse defines model for ListClustersResponse.
 type ListClustersResponse struct {
-	// Clusters Clusters.
+	// Clusters The list of clusters
 	Clusters []Cluster `json:"clusters"`
 }
 
-// ListConfigProfilesResponse A list of config profiles.
+// ListConfigProfilesResponse defines model for ListConfigProfilesResponse.
 type ListConfigProfilesResponse struct {
 	// ConfigProfiles The list of config profiles
 	ConfigProfiles []ConfigProfile `json:"configProfiles"`
 }
 
-// ListNodePoolsResponse A list of node pools.
+// ListNodePoolsResponse defines model for ListNodePoolsResponse.
 type ListNodePoolsResponse struct {
-	// NodePools Node pools.
+	// NodePools The list of node pools
 	NodePools []NodePool `json:"nodePools"`
 }
 
-// ListNodeSetsResponse A list of node sets.
+// ListNodeSetsResponse defines model for ListNodeSetsResponse.
 type ListNodeSetsResponse struct {
-	// NodeSets Node sets.
+	// NodeSets The list of node sets
 	NodeSets []NodeSet `json:"nodeSets"`
 }
 
-// ListNodesResponse A list of nodes.
+// ListNodesResponse defines model for ListNodesResponse.
 type ListNodesResponse struct {
-	// Nodes Nodes.
 	Nodes []Node `json:"nodes"`
 }
 
-// ListOSProfilesResponse A list of OS profiles.
+// ListOSProfilesResponse defines model for ListOSProfilesResponse.
 type ListOSProfilesResponse struct {
 	// OsProfiles The list of OS profiles
 	OsProfiles []OSProfile `json:"osProfiles"`
 }
 
-// MachineHealthIssue Flags the underlying machine for repair.
+// MachineHealthIssue defines model for MachineHealthIssue.
 type MachineHealthIssue struct {
-	// Category Issue category: one of Hardware, Network, Performance or Other.
+	// Category Category of the health issue. Must be a valid Forge category enum value (e.g., 'Hardware', 'Network', 'Performance', 'Other', etc.)
 	Category string `json:"category"`
 
-	// Summary Short summary, 2 to 256 characters.
+	// Summary Short summary describing the issue
 	Summary string `json:"summary"`
 
-	// Details Additional detail, 2 to 256 characters.
+	// Details Optional detailed information about the issue helpful for diagnosis
 	Details string `json:"details,omitempty"`
 }
 
-// NicoClusterProvider NICo identifiers for the cluster. Fixed at creation.
+// NicoClusterProvider Nico identity fields for a cluster. Mutually exclusive with `infra`.
 type NicoClusterProvider struct {
-	// OrgID Organization that owns the cluster.
+	// OrgID The ID of the NGC organization that owns the cluster
 	OrgID string `json:"orgID,omitempty"`
 
-	// SiteID NICo site ID.
+	// SiteID The registered Forge site ID for the cluster
 	SiteID openapi_types.UUID `json:"siteID,omitempty"`
 
-	// VpcID NICo VPC ID.
+	// VpcID The VPC ID where the Nico cluster is created
 	VpcID openapi_types.UUID `json:"vpcID,omitempty"`
 }
 
-// NicoControlPlaneProvider NICo settings for the control-plane nodes, as reported on read. Requests use
-// NicoControlPlaneProviderCreate and NicoControlPlaneProviderUpdate, which omit
-// the fields that direction cannot set.
+// NicoControlPlaneProvider The stored Nico cluster-level control plane fields, as reported on read.
+// Requests use `NicoControlPlaneProviderCreate` and `NicoControlPlaneProviderUpdate`,
+// which omit the fields that direction cannot set. Mutually exclusive with `infra`.
 type NicoControlPlaneProvider struct {
-	// ConfigProfile Config profile name for the control-plane nodes.
+	// ConfigProfile Config profile name for control plane nodes
 	ConfigProfile string `json:"configProfile,omitempty"`
 
-	// DiskSelectionStrategy Always smallest for control-plane nodes. Not configurable through the API.
+	// DiskSelectionStrategy Effective disk selection strategy for control plane nodes (always smallest).
+	// Not configurable through the API.
 	DiskSelectionStrategy *DiskSelectionStrategyCreate `json:"diskSelectionStrategy,omitempty"`
 
-	// InstanceTypePreference Ordered list of acceptable NICo instance types; index 0 is the highest priority.
+	// InstanceTypePreference Ordered Nico instance type IDs; index 0 is highest priority
 	InstanceTypePreference []openapi_types.UUID `json:"instanceTypePreference,omitempty"`
 
-	// OSProfile Name of an OS profile the Operator has supplied to the management plane.
+	// OSProfile OS profile name for Nico control plane nodes
 	OSProfile string `json:"osProfile,omitempty"`
 
-	// SSHKeyGroupIDs SSH key groups for node access. Can be updated.
+	// SSHKeyGroupIDs SSH key group IDs for control plane nodes
 	SSHKeyGroupIDs []openapi_types.UUID `json:"sshKeyGroupIDs,omitempty"`
 
-	// SubnetIDs Subnets, for sites without native networking.
+	// SubnetIDs Subnet IDs for control plane nodes when native networking is disabled
 	SubnetIDs []openapi_types.UUID `json:"subnetIDs,omitempty"`
 
-	// VpcPrefixIDs VPC prefixes, for sites with native networking.
+	// VpcPrefixIDs VPC prefix IDs for control plane nodes when native networking is enabled
 	VpcPrefixIDs []openapi_types.UUID `json:"vpcPrefixIDs,omitempty"`
 }
 
-// NicoControlPlaneProviderCreate NICo settings for control-plane nodes at creation. osProfile and configProfile
-// are required, and exactly one of subnetIDs and vpcPrefixIDs.
+// NicoControlPlaneProviderCreate The settable subset of the Nico control plane fields.
 type NicoControlPlaneProviderCreate struct {
-	// ConfigProfile Config profile name for the control-plane nodes. Required.
+	// ConfigProfile Config profile name for control plane nodes
 	ConfigProfile string `json:"configProfile,omitempty"`
 
-	// InstanceTypePreference Ordered list of acceptable NICo instance types; index 0 is the highest priority.
+	// InstanceTypePreference Ordered Nico instance type IDs; index 0 is highest priority
 	InstanceTypePreference []openapi_types.UUID `json:"instanceTypePreference,omitempty"`
 
-	// OSProfile Name of an OS profile the Operator has supplied to the management plane.
+	// OSProfile OS profile name for Nico control plane nodes
 	OSProfile string `json:"osProfile,omitempty"`
 
-	// SSHKeyGroupIDs SSH key groups for node access. Can be updated.
+	// SSHKeyGroupIDs SSH key group IDs for control plane nodes
 	SSHKeyGroupIDs []openapi_types.UUID `json:"sshKeyGroupIDs,omitempty"`
 
-	// SubnetIDs Subnets, for sites without native networking.
+	// SubnetIDs Subnet IDs for control plane nodes when native networking is disabled
 	SubnetIDs []openapi_types.UUID `json:"subnetIDs,omitempty"`
 
-	// VpcPrefixIDs VPC prefixes, for sites with native networking.
+	// VpcPrefixIDs VPC prefix IDs for control plane nodes when native networking is enabled
 	VpcPrefixIDs []openapi_types.UUID `json:"vpcPrefixIDs,omitempty"`
 }
 
-// NicoControlPlaneProviderUpdate Each field has three states: omitted leaves the stored value, a value replaces
-// it, and an empty value clears it. Clearing a required field is rejected.
+// NicoControlPlaneProviderUpdate The mutable subset of the Nico control plane fields.
+// Every field carries three states: omitted leaves the stored value alone, a value
+// replaces it, and an empty value clears it. Clearing a field the control plane
+// requires is rejected.
 type NicoControlPlaneProviderUpdate struct {
-	// ConfigProfile Config profile name for the control-plane nodes.
+	// ConfigProfile Config profile name for control plane nodes
 	ConfigProfile *string `json:"configProfile,omitempty"`
 
-	// InstanceTypePreference Ordered list of acceptable NICo instance types; index 0 is the highest priority.
+	// InstanceTypePreference Ordered Nico instance type IDs; index 0 is highest priority
 	InstanceTypePreference []openapi_types.UUID `json:"instanceTypePreference,omitempty"`
 
-	// OSProfile Name of an OS profile. Changing it starts a control-plane rollout.
+	// OSProfile OS profile name for Nico control plane nodes
 	OSProfile *string `json:"osProfile,omitempty"`
 
-	// SSHKeyGroupIDs SSH key groups for node access. Can be updated.
+	// SSHKeyGroupIDs SSH key group IDs for control plane nodes
 	SSHKeyGroupIDs []openapi_types.UUID `json:"sshKeyGroupIDs,omitempty"`
 
-	// SubnetIDs Subnets, for sites without native networking.
+	// SubnetIDs Subnet IDs for control plane nodes when native networking is disabled
 	SubnetIDs []openapi_types.UUID `json:"subnetIDs,omitempty"`
 
-	// VpcPrefixIDs VPC prefixes, for sites with native networking.
+	// VpcPrefixIDs VPC prefix IDs for control plane nodes when native networking is enabled
 	VpcPrefixIDs []openapi_types.UUID `json:"vpcPrefixIDs,omitempty"`
 }
 
-// NicoNodePoolProvider NICo settings for a node pool. instanceTypeID, osProfile and configProfile are
-// required, and exactly one of subnetIDs and vpcPrefixIDs.
+// NicoNodePoolProvider Nico fields for a node pool. Mutually exclusive with `infra`.
 type NicoNodePoolProvider struct {
-	// ConfigProfile Config profile name for the pool's nodes. Required when creating a pool.
+	// ConfigProfile Config profile name for nodes
 	ConfigProfile string `json:"configProfile,omitempty"`
 
-	// DiskSelectionStrategy Which disk the OS is installed on. Default smallest.
+	// DiskSelectionStrategy The strategy to use for selecting the OS install disk on nodes.
 	DiskSelectionStrategy DiskSelectionStrategyCreate `json:"diskSelectionStrategy,omitempty"`
 
-	// InfinibandPartitionID InfiniBand partition. Fixed at creation.
+	// InfinibandPartitionID Infiniband partition ID for Nico instances
 	InfinibandPartitionID *openapi_types.UUID `json:"infinibandPartitionID,omitempty"`
 
-	// InstanceTypeID NICo instance type. Fixed at creation.
+	// InstanceTypeID Nico instance type ID
 	InstanceTypeID openapi_types.UUID `json:"instanceTypeID,omitempty"`
 
-	// NvLinkLogicalPartitionID NVLink logical partition. Fixed at creation.
+	// NvLinkLogicalPartitionID NVLink logical partition ID for Nico instances
 	NvLinkLogicalPartitionID *openapi_types.UUID `json:"nvLinkLogicalPartitionID,omitempty"`
 
-	// OSProfile Name of an OS profile the Operator has supplied to the management plane.
+	// OSProfile OS profile name for Nico nodes
 	OSProfile string `json:"osProfile,omitempty"`
 
-	// SSHKeyGroupIDs SSH key groups for node access. Fixed at creation.
+	// SSHKeyGroupIDs SSH key group IDs for Nico instances
 	SSHKeyGroupIDs *[]openapi_types.UUID `json:"sshKeyGroupIDs,omitempty"`
 
-	// SubnetIDs Subnets, for sites without native networking.
+	// SubnetIDs Subnet IDs for Nico instances when native networking is disabled
 	SubnetIDs []openapi_types.UUID `json:"subnetIDs,omitempty"`
 
-	// VpcPrefixIDs VPC prefixes, for sites with native networking.
+	// VpcPrefixIDs VPC prefix IDs for Nico instances when native networking is enabled
 	VpcPrefixIDs []openapi_types.UUID `json:"vpcPrefixIDs,omitempty"`
 }
 
-// NicoNodePoolProviderUpdate Fields fixed at creation (instanceTypeID, partitions, sshKeyGroupIDs) cannot be
-// sent: a request carrying one is rejected with 400. A body echoed from GET must
-// have them stripped.
+// NicoNodePoolProviderUpdate The mutable subset of the Nico node pool fields. `instanceTypeID`,
+// `infinibandPartitionID`, `nvLinkLogicalPartitionID` and `sshKeyGroupIDs`
+// are fixed when the pool is created and are therefore absent here: sending
+// one is rejected with 400. A body echoed from GET must have them stripped.
 type NicoNodePoolProviderUpdate struct {
-	// ConfigProfile Config profile name for the pool's nodes. An empty string is rejected: a pool
-	// always has a config profile.
+	// ConfigProfile Config profile name for nodes. Omit = no change. An empty string is a
+	// request to clear it, which is rejected: a Nico node pool always has a
+	// config profile.
 	ConfigProfile *string `json:"configProfile,omitempty"`
 
-	// DiskSelectionStrategy Which disk the OS is installed on. Default smallest.
+	// DiskSelectionStrategy The strategy to use for selecting the OS install disk on nodes.
 	DiskSelectionStrategy *DiskSelectionStrategy `json:"diskSelectionStrategy,omitempty"`
 
-	// OSProfile Name of an OS profile. Changing it rolls the pool's nodes to the new profile. An
-	// empty string is rejected: a pool always has an OS profile.
+	// OSProfile OS profile name for Nico nodes. Omit = no change. An empty
+	// string is a request to clear it, which is rejected: a Nico node pool
+	// always has an OS profile.
 	OSProfile *string `json:"osProfile,omitempty"`
 
-	// SubnetIDs Replaces the list; [] clears it. Subnets, for sites without native networking.
+	// SubnetIDs Subnet IDs to set (replaces existing). Omit = no change. Empty array = replace with empty (clear all).
+	// Allowed only when the site does not have native networking.
 	SubnetIDs []openapi_types.UUID `json:"subnetIDs,omitempty"`
 
-	// VpcPrefixIDs Replaces the list; [] clears it. VPC prefixes, for sites with native networking.
+	// VpcPrefixIDs VPC prefix IDs to set (replaces existing). Omit = no change. Empty array = replace with empty (clear all).
+	// Allowed only when the site has native networking.
 	VpcPrefixIDs []openapi_types.UUID `json:"vpcPrefixIDs,omitempty"`
 }
 
-// NicoNodeProvider NICo identifiers of the machine behind a node. Omitted when none of its fields are set.
+// NicoNodeProvider Nico runtime fields for a provisioned node.
 type NicoNodeProvider struct {
-	// InstanceID NICo instance ID.
+	// InstanceID Nico instance ID created for the node
 	InstanceID string `json:"instanceID,omitempty"`
 
-	// InstanceTypeID NICo instance type the node was provisioned with.
+	// InstanceTypeID Nico instance type ID used to provision the node
 	InstanceTypeID openapi_types.UUID `json:"instanceTypeID,omitempty"`
 
-	// MachineID NICo machine ID.
+	// MachineID Nico machine ID for the node
 	MachineID string `json:"machineID,omitempty"`
 }
 
-// NicoNodeSetProvider NICo settings in a node set (read-only snapshot).
+// NicoNodeSetProvider Nico fields for a node set (read-only snapshot).
 type NicoNodeSetProvider struct {
-	// ConfigProfile Config profile name for the pool's nodes. Required when creating a pool.
+	// ConfigProfile Config profile name for nodes
 	ConfigProfile string `json:"configProfile,omitempty"`
 
-	// DiskSelectionStrategy Which disk the OS is installed on. Default smallest.
+	// DiskSelectionStrategy The strategy to use for selecting the OS install disk on nodes.
 	DiskSelectionStrategy DiskSelectionStrategyCreate `json:"diskSelectionStrategy,omitempty"`
 
-	// OSProfile Name of an OS profile the Operator has supplied to the management plane.
+	// OSProfile OS profile name for Nico nodes
 	OSProfile string `json:"osProfile,omitempty"`
 
-	// SubnetIDs Subnets, for sites without native networking.
+	// SubnetIDs Subnet IDs for Nico instances when native networking is disabled
 	SubnetIDs []openapi_types.UUID `json:"subnetIDs,omitempty"`
 
-	// VpcPrefixIDs VPC prefixes, for sites with native networking.
+	// VpcPrefixIDs VPC prefix IDs for Nico instances when native networking is enabled
 	VpcPrefixIDs []openapi_types.UUID `json:"vpcPrefixIDs,omitempty"`
 }
 
-// Node A single machine in a cluster, with lifecycle and health conditions.
+// Node defines model for Node.
 type Node struct {
-	// ID Node ID.
+	// ID The ID of the node
 	ID openapi_types.UUID `json:"id"`
 
-	// NodePoolID Owning node pool. The nil UUID for control-plane nodes.
+	// NodePoolID The ID of the node pool that owns the node
 	NodePoolID openapi_types.UUID `json:"nodePoolID"`
 
-	// NodeSetID Owning NodeSet. The nil UUID for control-plane nodes.
+	// NodeSetID The ID of the node set that owns the node
 	NodeSetID openapi_types.UUID `json:"nodeSetID"`
 
-	// Name Node name.
+	// Name The name of the node
 	Name string `json:"name"`
 
-	// IP Node IP address.
+	// IP The IP address of the node
 	IP string `json:"ip,omitempty"`
 
-	// Conditions Lifecycle and health conditions.
+	// Conditions Conditions representing various aspects of the node's state
 	Conditions NodeConditions `json:"conditions"`
 
-	// ControlPlane Whether the node is a control-plane node.
+	// ControlPlane True if this is a control-plane node (managed by a control-plane node pool or the control-plane controller)
 	ControlPlane bool `json:"controlPlane"`
 
-	// ControlPlaneRollout Control-plane nodes only.
+	// ControlPlaneRollout Read-only, derived rollout state for a control-plane-controller-managed node. pending is computed exactly as the control-plane controller computes it: the node needs rollout when its pinned snapshot differs from the cluster's desired snapshot in the OS profile, config profile, or Kubernetes version. The pinned and desired snapshots themselves are resolvable in full (change reason, author, timestamp) from pinnedConfigurationID and desiredConfigurationID via GET /clusters/{clusterID}/control-plane/configHistory.
 	ControlPlaneRollout *ControlPlaneRolloutStatus `json:"controlPlaneRollout,omitempty"`
 
-	// Nico NICo instanceID, machineID and instanceTypeID. Omitted when none are set.
+	// Nico Nico runtime fields for a provisioned node.
 	Nico *NicoNodeProvider `json:"nico,omitempty"`
 }
 
-// NodeConditions Each is a Condition. A node normally moves through pending, provisioningClaimed,
-// provisioning, readyToJoin, joined and provisioned; deletion moves through
-// deleteRequested (control-plane nodes) and deleting.
+// NodeConditions Conditions representing various aspects of the node's state
 type NodeConditions struct {
-	// ControlPlaneRolloutRequired Control-plane nodes only. True when the node differs from the desired configuration.
 	ControlPlaneRolloutRequired *Condition `json:"controlPlaneRolloutRequired,omitempty"`
-
-	// DeleteRequested A delete has been accepted but teardown has not started. Control-plane deletes
-	// are recorded here first and started one at a time; `deleting` then reports the
-	// teardown. At most one of deleting and deleteRequested is True.
-	DeleteRequested Condition `json:"deleteRequested"`
-
-	// Deleting The node is being deleted.
-	Deleting Condition `json:"deleting"`
-
-	// Joined The node has joined the cluster.
-	Joined Condition `json:"joined"`
-
-	// KubernetesReady The kubelet reports Ready.
-	KubernetesReady Condition `json:"kubernetesReady"`
-
-	// KubernetesUnschedulable Reflects the Kubernetes node's unschedulable (cordoned) state.
-	KubernetesUnschedulable Condition `json:"kubernetesUnschedulable"`
-
-	// MarkedForRecycling The node is marked for replacement.
-	MarkedForRecycling Condition `json:"markedForRecycling"`
-
-	// MarkedForRepair The node is marked for repair.
-	MarkedForRepair Condition `json:"markedForRepair"`
-
-	// NodeAgentReady The NKE node agent is healthy.
-	NodeAgentReady Condition `json:"nodeAgentReady"`
-
-	// Pending The node is waiting to be provisioned.
-	Pending Condition `json:"pending"`
-
-	// Provisioned The node is provisioned.
-	Provisioned Condition `json:"provisioned"`
-
-	// Provisioning The node is provisioning.
-	Provisioning Condition `json:"provisioning"`
-
-	// ProvisioningClaimed A provisioning operation has claimed the node.
-	ProvisioningClaimed Condition `json:"provisioningClaimed"`
-
-	// ReadyToJoin The node is ready to join the cluster.
-	ReadyToJoin Condition `json:"readyToJoin"`
-
-	// Rebooting The node is rebooting.
-	Rebooting Condition `json:"rebooting"`
-
-	// TeleportRegistered The condition indicating whether the node is registered with Teleport for SSH. True when confirmed registered; includes lastTransitionTime and message.
-	TeleportRegistered *Condition `json:"teleportRegistered,omitempty"`
+	DeleteRequested             Condition  `json:"deleteRequested"`
+	Deleting                    Condition  `json:"deleting"`
+	Joined                      Condition  `json:"joined"`
+	KubernetesReady             Condition  `json:"kubernetesReady"`
+	KubernetesUnschedulable     Condition  `json:"kubernetesUnschedulable"`
+	MarkedForRecycling          Condition  `json:"markedForRecycling"`
+	MarkedForRepair             Condition  `json:"markedForRepair"`
+	NodeAgentReady              Condition  `json:"nodeAgentReady"`
+	Pending                     Condition  `json:"pending"`
+	Provisioned                 Condition  `json:"provisioned"`
+	Provisioning                Condition  `json:"provisioning"`
+	ProvisioningClaimed         Condition  `json:"provisioningClaimed"`
+	ReadyToJoin                 Condition  `json:"readyToJoin"`
+	Rebooting                   Condition  `json:"rebooting"`
+	TeleportRegistered          *Condition `json:"teleportRegistered,omitempty"`
 }
 
-// NodeNamePrefix Prefix for generated node names: `<cluster name>-<nodeNamePrefix>-<suffix>`.
+// NodeHistory defines model for NodeHistory.
+type NodeHistory struct {
+	Workflows []NodeHistoryWorkflow `json:"workflows"`
+}
+
+// NodeHistoryActivity defines model for NodeHistoryActivity.
+type NodeHistoryActivity struct {
+	CloseTime *time.Time `json:"closeTime,omitempty"`
+
+	// DurationMs Duration in milliseconds, or elapsed time if still running
+	DurationMs int64 `json:"durationMs"`
+
+	// FailureMessage The error message describing why the activity failed
+	FailureMessage *string   `json:"failureMessage,omitempty"`
+	Name           string    `json:"name"`
+	ScheduledTime  time.Time `json:"scheduledTime"`
+
+	// Status Activity status: Running, Completed, Failed
+	Status string `json:"status"`
+}
+
+// NodeHistoryWorkflow defines model for NodeHistoryWorkflow.
+type NodeHistoryWorkflow struct {
+	Activities []NodeHistoryActivity `json:"activities"`
+	CloseTime  *time.Time            `json:"closeTime,omitempty"`
+
+	// DurationMs Duration in milliseconds, or elapsed time if still running
+	DurationMs int64     `json:"durationMs"`
+	RunID      string    `json:"runID"`
+	StartTime  time.Time `json:"startTime"`
+
+	// Status Workflow execution status: Running, Completed, Failed, Canceled, Terminated, TimedOut
+	Status       string `json:"status"`
+	WorkflowID   string `json:"workflowID"`
+	WorkflowType string `json:"workflowType"`
+}
+
+// NodeNamePrefix Legacy node naming field. MachineDeployment-backed worker pools derive
+// node names from the node pool name and ignore this field.
+// Prefix for generated node names: <cluster name>-<nodeNamePrefix>-<suffix>.
 // CWE assigns suffix as a 4-digit decimal number (0000–9999).
 // Generated names must fit within 63 characters (Kubernetes Node name limit).
 // Maximum prefix length depends on cluster name length.
 type NodeNamePrefix = string
 
-// NodePool A group of worker nodes sharing an instance type, OS profile and Kubernetes version.
+// NodePool defines model for NodePool.
 type NodePool struct {
-	// ID Node pool ID.
+	// ID The ID of the node pool
 	ID openapi_types.UUID `json:"id"`
 
-	// ClusterID Parent cluster.
+	// ClusterID The ID of the cluster that owns the node pool
 	ClusterID openapi_types.UUID `json:"clusterID"`
 
-	// Name Node pool name. Unique within the cluster. Immutable.
+	// Name The name of the node pool
 	Name string `json:"name"`
 
-	// KubernetesVersion Desired Kubernetes version for the pool's nodes. Inherits the cluster's version on create.
+	// KubernetesVersion The desired version of Kubernetes for nodes in the pool
 	KubernetesVersion string `json:"kubernetesVersion"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes (e.g., "16Gi", "128Gi")
 	SystemReservedMemory *string `json:"systemReservedMemory,omitempty"`
 
-	// KubeReservedMemory Memory reserved for Kubernetes components. Empty when the 2Gi default applies.
+	// KubeReservedMemory The amount of memory to reserve for Kubernetes processes (e.g., "2Gi", "250Mi"). Empty when the kubelet configuration patch uses its default (2Gi).
 	KubeReservedMemory *string `json:"kubeReservedMemory,omitempty"`
 
 	// ControlPlane Whether the nodes in this pool are control plane nodes
 	ControlPlane bool `json:"controlPlane"`
 
-	// NodeLabels Labels applied to the pool's nodes, as key=value. Set at creation.
+	// NodeLabels A list of labels for the nodes in the pool
 	NodeLabels []string `json:"nodeLabels"`
 
-	// Description Free-text description.
+	// Description An optional description for the node pool.
 	Description *string `json:"description,omitempty"`
 
-	// DesiredNodeCount Number of nodes.
+	// DesiredNodeCount The desired number of nodes in the pool
 	DesiredNodeCount int `json:"desiredNodeCount"`
 
-	// AutoProvisionDisabled Disables automatic provisioning for the pool.
+	// AutoProvisionDisabled Whether the node pool is disabled for auto-provisioning.
 	AutoProvisionDisabled bool `json:"autoProvisionDisabled"`
 
-	// Conditions Lifecycle conditions: provisioning, provisioned, deleting.
+	// Conditions Conditions representing various aspects of the node pool's state
 	Conditions NodePoolConditions `json:"conditions"`
 
-	// CurrentNodeSetID The active NodeSet.
+	// CurrentNodeSetID The ID of the current node set for the node pool
 	CurrentNodeSetID *openapi_types.UUID `json:"currentNodeSetID"`
 
-	// Infra Infra provider node pool fields.
+	// Infra Infra provider fields for a node pool. Mutually exclusive with `nico`.
 	Infra *InfraNodePoolProvider `json:"infra,omitempty"`
 
-	// Nico NICo settings for the pool.
+	// Nico Nico fields for a node pool. Mutually exclusive with `infra`.
 	Nico *NicoNodePoolProvider `json:"nico,omitempty"`
 
-	// NodeNamePrefix Node names are `<cluster>-<prefix>-<NNNN>` (four-digit suffix), at most 63 characters in total.
-	NodeNamePrefix NodeNamePrefix `json:"nodeNamePrefix"`
+	// NodeNamePrefix Legacy node naming field. MachineDeployment-backed worker pools derive
+	// node names from the node pool name and ignore this field.
+	// Prefix for generated node names: <cluster name>-<nodeNamePrefix>-<suffix>.
+	// CWE assigns suffix as a 4-digit decimal number (0000–9999).
+	// Generated names must fit within 63 characters (Kubernetes Node name limit).
+	// Maximum prefix length depends on cluster name length.
+	// Deprecated:
+	NodeNamePrefix NodeNamePrefix `json:"nodeNamePrefix,omitempty"`
 
-	// AutoModeDisabled Disables auto-mode (automatic node recycling).
+	// AutoModeDisabled Whether the node pool is disabled for auto-mode (automatic node recycling).
 	AutoModeDisabled bool `json:"autoModeDisabled"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not recycled automatically.
+	// ProvisioningMonitorDisabled Whether the timeout-based provisioning monitor is paused for this node pool. When true, nodes stuck in provisioning past the configured timeout will not be recycled by the system; an operator must investigate manually.
 	ProvisioningMonitorDisabled bool `json:"provisioningMonitorDisabled"`
 
-	// RecycleBudget Maximum number of nodes recycled at once.
+	// RecycleBudget The maximum number of nodes that can be recycled at once.
 	RecycleBudget int `json:"recycleBudget"`
 
-	// MaxSurge Nodes allowed above desiredNodeCount during a rollout. 0 means sequential: each
-	// node is torn down before its replacement is provisioned.
+	// MaxSurge Controls surge node provisioning during upgrades.
+	// - 0: Sequential upgrade (teardown then provision)
 	MaxSurge *int `json:"maxSurge,omitempty"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for nodes in this pool.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// NodePoolConditions Lifecycle conditions of a node pool. Each is a Condition.
+// NodePoolConditions Conditions representing various aspects of the node pool's state
 type NodePoolConditions struct {
-	// Deleting The node pool is being deleted.
-	Deleting Condition `json:"deleting"`
-
-	// Provisioned The node pool is provisioned.
-	Provisioned Condition `json:"provisioned"`
-
-	// Provisioning The node pool is provisioning.
+	Deleting     Condition `json:"deleting"`
+	Provisioned  Condition `json:"provisioned"`
 	Provisioning Condition `json:"provisioning"`
 }
 
-// NodePoolConfigChange One node pool configuration snapshot and what changed in it.
+// NodePoolConfigChange defines model for NodePoolConfigChange.
 type NodePoolConfigChange struct {
-	// ChangedFields Fields that changed relative to the previous snapshot. Empty for the first entry.
+	// ChangedFields Fields that changed relative to the previous snapshot. Empty for the initial snapshot.
 	ChangedFields []NodePoolConfigField `json:"changedFields"`
 
-	// CreatedAt When the change took effect.
+	// CreatedAt When this config snapshot was created (i.e. when the config change took effect).
 	CreatedAt time.Time `json:"createdAt"`
 
-	// IsCurrent Whether this is the pool's current configuration.
+	// IsCurrent Whether this NodeSet is the current active config for the node pool.
 	IsCurrent bool `json:"isCurrent"`
 
-	// NodeSetID The NodeSet snapshot that holds this configuration.
+	// NodeSetID The ID of the NodeSet snapshot representing this config.
 	NodeSetID openapi_types.UUID `json:"nodeSetID"`
 }
 
-// NodePoolConfigField One field that changed between two snapshots. Values are JSON-encoded.
+// NodePoolConfigField defines model for NodePoolConfigField.
 type NodePoolConfigField struct {
-	// Field The field that changed.
+	// Field The name of the config field that changed.
 	Field string `json:"field"`
 
-	// From JSON-encoded previous value. Omitted for the first entry.
+	// From The previous value, JSON-encoded. Omitted for the initial snapshot.
 	From *string `json:"from,omitempty"`
 
-	// To JSON-encoded new value.
+	// To The new value, JSON-encoded.
 	To string `json:"to"`
 }
 
-// NodePoolConfigHistory Ordered snapshots of node pool configuration changes.
+// NodePoolConfigHistory defines model for NodePoolConfigHistory.
 type NodePoolConfigHistory struct {
-	// Changes Oldest first.
+	// Changes Config snapshots ordered from oldest to newest. Each entry after the first shows which fields changed relative to the previous snapshot.
 	Changes []NodePoolConfigChange `json:"changes"`
 }
 
-// NodePoolCreateConfig A node pool and its provider settings. The provider follows the cluster's
-// and is fixed at creation.
+// NodePoolCreateConfig A node pool follows its cluster's provider, so exactly one provider payload is
+// required: supply either `nico` or `infra`. A request carrying both, or neither,
+// is rejected with 400.
 type NodePoolCreateConfig struct {
-	// Name Unique within the cluster. Immutable.
+	// Name The name of the node pool (must conform to Kubernetes resource naming standards)
 	Name string `json:"name"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes (e.g., "16Gi", "128Gi")
 	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
 
-	// KubeReservedMemory Memory reserved for Kubernetes components. Default 2Gi.
+	// KubeReservedMemory The amount of memory to reserve for Kubernetes processes (e.g., "2Gi", "250Mi"). When unset, the kubelet configuration patch uses its default (2Gi).
 	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
 
 	// ControlPlane Whether the nodes in this pool should be added as Kubernetes control plane nodes
 	ControlPlane bool `json:"controlPlane,omitempty"`
 
-	// NodeLabels Labels applied to the pool's nodes, as key=value. Set at creation.
+	// NodeLabels A list of labels for the nodes in the pool
 	NodeLabels *[]string `json:"nodeLabels,omitempty"`
 
-	// DesiredNodeCount The desired number of nodes in the pool. For control-plane pools, aggregate capacity above 1 requires controlPlaneVIP on the cluster.
+	// DesiredNodeCount The desired number of nodes in the pool
 	DesiredNodeCount int `json:"desiredNodeCount"`
 
-	// Description Free-text description.
+	// Description An optional description for the node pool.
 	Description *string `json:"description,omitempty"`
 
 	// Infra Infra provider fields for a node pool. Mutually exclusive with `nico`.
 	Infra *InfraNodePoolProvider `json:"infra,omitempty"`
 
-	// Nico NICo settings for a node pool. instanceTypeID, osProfile and configProfile are
-	// required, and exactly one of subnetIDs and vpcPrefixIDs.
+	// Nico Nico fields for a node pool. Mutually exclusive with `infra`.
 	Nico *NicoNodePoolProvider `json:"nico,omitempty"`
 
-	// NodeNamePrefix Prefix for generated node names: `<cluster name>-<nodeNamePrefix>-<suffix>`.
+	// NodeNamePrefix Legacy node naming field. MachineDeployment-backed worker pools derive
+	// node names from the node pool name and ignore this field.
+	// Prefix for generated node names: <cluster name>-<nodeNamePrefix>-<suffix>.
 	// CWE assigns suffix as a 4-digit decimal number (0000–9999).
 	// Generated names must fit within 63 characters (Kubernetes Node name limit).
 	// Maximum prefix length depends on cluster name length.
-	NodeNamePrefix NodeNamePrefix `json:"nodeNamePrefix"`
+	// Deprecated:
+	NodeNamePrefix NodeNamePrefix `json:"nodeNamePrefix,omitempty"`
 
-	// AutoProvisionDisabled Disables automatic provisioning for the pool.
+	// AutoProvisionDisabled Whether the node pool is disabled for auto-provisioning.
 	AutoProvisionDisabled *bool `json:"autoProvisionDisabled,omitempty"`
 
-	// AutoModeDisabled Disables auto-mode (automatic node recycling).
+	// AutoModeDisabled Whether the node pool is disabled for auto-mode (automatic node recycling).
 	AutoModeDisabled *bool `json:"autoModeDisabled,omitempty"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not recycled automatically.
+	// ProvisioningMonitorDisabled Whether the timeout-based provisioning monitor is paused for this node pool. When true, nodes stuck in provisioning past the configured timeout will not be recycled by the system; an operator must investigate manually.
 	ProvisioningMonitorDisabled *bool `json:"provisioningMonitorDisabled,omitempty"`
 
-	// RecycleBudget Maximum number of nodes recycled at once.
+	// RecycleBudget The maximum number of nodes that can be recycled at once.
 	RecycleBudget *int `json:"recycleBudget,omitempty"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for nodes in this pool. When omitted, the server-side default for the site is applied based on pool role.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// NodeSet Read-only, immutable snapshot of a node pool's configuration at a point in time.
+// NodeSet defines model for NodeSet.
 type NodeSet struct {
-	// DesiredCount Number of nodes in the snapshot.
+	// DesiredCount The desired number of nodes in the node set
 	DesiredCount int `json:"desiredCount"`
 
-	// ID NodeSet ID.
+	// ID The ID of the node set
 	ID openapi_types.UUID `json:"id"`
 
-	// Infra Infra provider node set fields.
+	// Infra Infra provider fields for a node set (read-only snapshot).
 	Infra *InfraNodeSetProvider `json:"infra,omitempty"`
 
-	// KubeReservedMemory Memory reserved for Kubernetes components. Empty when the 2Gi default applies.
+	// KubeReservedMemory The amount of memory to reserve for Kubernetes processes (e.g., "2Gi", "250Mi"). Empty when the kubelet configuration patch uses its default (2Gi).
 	KubeReservedMemory *string `json:"kubeReservedMemory,omitempty"`
 
-	// KubernetesVersion Kubernetes version in the snapshot.
+	// KubernetesVersion The version of Kubernetes for nodes in the node set
 	KubernetesVersion string `json:"kubernetesVersion"`
 
-	// Nico NICo settings in the snapshot.
+	// Nico Nico fields for a node set (read-only snapshot).
 	Nico *NicoNodeSetProvider `json:"nico,omitempty"`
 
-	// NodePoolID Owning node pool.
+	// NodePoolID The ID of the node pool that owns the node set
 	NodePoolID openapi_types.UUID `json:"nodePoolID"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes (e.g., "16Gi", "128Gi")
 	SystemReservedMemory string `json:"systemReservedMemory"`
 
 	// TeleportEnabled Whether Teleport SSH enrollment is enabled for nodes in this node set.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// OSProfile An OS profile available to the management plane.
+// OSProfile defines model for OSProfile.
 type OSProfile struct {
 	// Name The name of the OS profile
 	Name string `json:"name"`
 }
 
-// UpdateClusterControlPlaneConfig Changes to `osProfile` or the Kubernetes version start a control-plane
-// rollout. All fields are optional. A provider payload that does not match the
-// cluster's provider is rejected with 400.
-// Rollout-triggering changes require controlPlaneVIP. maxSurge alone does not
-// trigger a rollout and remains mutable without a VIP.
+// UpdateClusterControlPlaneConfig `nico` and `infra` are mutually exclusive: supply at most one of them (both
+// may be omitted). A request carrying both is rejected with 400, as is a
+// provider payload that does not match the cluster.
 type UpdateClusterControlPlaneConfig struct {
 	// DesiredCount The desired number of cluster-level control plane nodes. Must be at least 1.
-	// Increasing the count above 1 requires controlPlaneVIP on the cluster.
 	DesiredCount *int `json:"desiredCount,omitempty"`
 
 	// Infra The mutable infra provider control plane fields. Every field carries three states: omitted
 	// leaves the stored value alone, a value replaces it, and an empty value clears it.
-	// Mutually exclusive with `nico`: a request carrying both is rejected with 400.
 	Infra *InfraControlPlaneProviderUpdate `json:"infra,omitempty"`
 
-	// MaxSurge Extra control-plane nodes allowed during a rollout (0 or 1).
+	// MaxSurge Set cluster-level max surge.
 	MaxSurge *int `json:"maxSurge,omitempty"`
 
-	// Nico Each field has three states: omitted leaves the stored value, a value replaces
-	// it, and an empty value clears it. Clearing a required field is rejected.
+	// Nico The mutable subset of the Nico control plane fields.
+	// Every field carries three states: omitted leaves the stored value alone, a value
+	// replaces it, and an empty value clears it. Clearing a field the control plane
+	// requires is rejected.
 	Nico *NicoControlPlaneProviderUpdate `json:"nico,omitempty"`
 
-	// NodeLabels Replaces the existing labels.
+	// NodeLabels Replace the labels applied to control plane nodes.
 	NodeLabels *[]string `json:"nodeLabels,omitempty"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not replaced automatically.
+	// ProvisioningMonitorDisabled Pause or resume the provisioning monitor for cluster-level control plane nodes.
 	ProvisioningMonitorDisabled *bool `json:"provisioningMonitorDisabled,omitempty"`
 
-	// SystemReservedMemory Memory reserved for system daemons.
+	// SystemReservedMemory Set the reserved system memory for control plane nodes (e.g., "16Gi").
 	SystemReservedMemory *string `json:"systemReservedMemory,omitempty"`
 
 	// TeleportEnabled Enable or disable Teleport SSH enrollment for control plane nodes.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// UpdateClusterRequest Changes to a cluster. All fields are optional; unknown fields are rejected.
+// UpdateClusterRequest defines model for UpdateClusterRequest.
 type UpdateClusterRequest struct {
-	// ControlPlaneConfig Changes to `osProfile` or the Kubernetes version start a control-plane
-	// rollout. All fields are optional. A provider payload that does not match the
-	// cluster's provider is rejected with 400.
-	// Rollout-triggering changes require controlPlaneVIP. maxSurge alone does not
-	// trigger a rollout and remains mutable without a VIP.
+	// ControlPlaneConfig `nico` and `infra` are mutually exclusive: supply at most one of them (both
+	// may be omitted). A request carrying both is rejected with 400, as is a
+	// provider payload that does not match the cluster.
 	ControlPlaneConfig *UpdateClusterControlPlaneConfig `json:"controlPlaneConfig,omitempty"`
 
-	// ControlPlaneKubernetesVersion Target control-plane version, as X.Y.Z with no leading "v". Must be newer than
-	// the current version by at most one minor version and keep every worker pool
-	// within 3 minor versions.
-	// The cluster must have controlPlaneVIP configured.
+	// ControlPlaneKubernetesVersion Target Kubernetes version for control plane upgrade (must be greater than current version).
+	// Must be a valid semver version core (X.Y.Z only, e.g. 1.29.7).
+	// Must not include a leading "v".
+	// The pattern is the version-core part of the regex from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
 	ControlPlaneKubernetesVersion *string `json:"controlPlaneKubernetesVersion,omitempty"`
 
-	// EnableCPNodeRecycling Turn automatic control-plane node replacement on or off.
+	// EnableCPNodeRecycling Enable or disable control plane node recycling during version upgrades.
 	EnableCPNodeRecycling *bool `json:"enableCPNodeRecycling,omitempty"`
 
-	// EnableEtcdEncryption `true` starts one-way etcd encryption on a provisioned cluster. `false` is
-	// rejected. `true` on an already-encrypted cluster does nothing. Other updates
-	// return 409 while it runs.
+	// EnableEtcdEncryption Set to true to start one-way etcd encryption enablement on a provisioned cluster.
+	// false is rejected because disabling etcd encryption is not supported.
+	// If the cluster is already encrypted, true is treated as an idempotent no-op.
+	// While the operation is running, subsequent UpdateCluster mutations return 409.
 	EnableEtcdEncryption *bool `json:"enableEtcdEncryption,omitempty"`
 
-	// EnableOidc `true` starts one-way OIDC authentication enablement. `false` is rejected.
-	// Cannot be combined with a control-plane upgrade or etcd enablement. Other
-	// updates return 409 while it runs.
+	// EnableOidc Set to true to start one-way OIDC authentication enablement on a provisioned cluster.
+	// false is rejected because disabling OIDC authentication is not supported.
+	// If OIDC is already enabled, true is treated as an idempotent no-op.
+	// Cannot be combined with a control-plane Kubernetes upgrade or etcd encryption
+	// enablement in the same request. While the operation is running, subsequent
+	// UpdateCluster mutations return 409.
 	EnableOidc *bool `json:"enableOidc,omitempty"`
 
-	// Network The cluster network cannot be changed after creation; any network value in an
-	// update is rejected.
+	// Network Immutable cluster network configuration. Any value supplied on update is rejected.
 	Network *ClusterNetworkCreateConfig `json:"network,omitempty"`
 
 	// TeleportEnabled Enable or disable Teleport SSH enrollment for nodes in this cluster.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// UpdateInProgress The mutually exclusive cluster operation in progress. Absent when none.
+// UpdateInProgress A mutually-exclusive cluster mutation in flight.
 type UpdateInProgress struct {
-	// Type Operation in progress.
+	// Type The kind of long-running cluster mutation in flight.
 	Type UpdateInProgressType `json:"type"`
 
-	// Message Detail.
+	// Message Optional human-readable context for the in-flight operation.
 	Message *string `json:"message,omitempty"`
 
-	// StartedAt Start time.
+	// StartedAt Timestamp at which the operation was started.
 	StartedAt time.Time `json:"startedAt"`
 }
 
-// UpdateInProgressType Operation in progress.
+// UpdateInProgressType The kind of long-running cluster mutation in flight.
 type UpdateInProgressType string
 
-// UpdateNodePoolRequest All fields are optional. A provider payload that does not match the node pool's
-// cluster is rejected with 400.
-// Updating a control-plane pool in a way that creates a replacement node set
-// requires controlPlaneVIP. maxSurge alone does not create a replacement
-// and remains mutable without a VIP.
+// UpdateNodePoolRequest `nico` and `infra` are mutually exclusive: supply at most one of them (both
+// may be omitted). A request carrying both is rejected with 400, as is a
+// provider payload that does not match the node pool's cluster.
 type UpdateNodePoolRequest struct {
-	// AutoModeDisabled Disables auto-mode (automatic node recycling).
+	// AutoModeDisabled Whether the node pool is disabled for auto-mode (automatic node recycling).
 	AutoModeDisabled *bool `json:"autoModeDisabled,omitempty"`
 
-	// AutoProvisionDisabled Disables automatic provisioning for the pool.
+	// AutoProvisionDisabled Whether the node pool is disabled for auto-provisioning.
 	AutoProvisionDisabled *bool `json:"autoProvisionDisabled,omitempty"`
 
-	// Description Free-text description.
+	// Description An optional description for the node pool.
 	Description *string `json:"description,omitempty"`
 
-	// DesiredNodeCount The desired number of nodes in the pool. Increasing aggregate control-plane capacity above 1 requires controlPlaneVIP on the cluster.
+	// DesiredNodeCount The desired number of nodes in the pool
 	DesiredNodeCount *int `json:"desiredNodeCount,omitempty"`
 
 	// Infra The mutable infra provider node pool fields. Every field carries three states: omitted
 	// leaves the stored value alone, a value replaces it, and an empty value clears it.
-	// Mutually exclusive with `nico`: a request carrying both is rejected with 400.
 	Infra *InfraNodePoolProviderUpdate `json:"infra,omitempty"`
 
-	// KubeReservedMemory Memory reserved for Kubernetes components. An empty string restores the 2Gi default.
+	// KubeReservedMemory The amount of memory to reserve for Kubernetes processes (e.g., "2Gi", "250Mi"). Set an empty value to restore the kubelet configuration patch default (2Gi).
 	KubeReservedMemory *string `json:"kubeReservedMemory,omitempty"`
 
-	// KubernetesVersion Desired Kubernetes version for the pool's nodes, as X.Y.Z with no leading "v".
-	// Must be newer than the current version.
+	// KubernetesVersion Target Kubernetes version for worker node upgrade (must be greater than current version).
+	// Must be a valid semver version core (X.Y.Z only, e.g. 1.29.7).
+	// Must not include a leading "v".
+	// The pattern is the version-core part of the regex from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
 	KubernetesVersion *string `json:"kubernetesVersion,omitempty"`
 
-	// MaxSurge Nodes allowed above desiredNodeCount during a rollout. 0 means sequential: each
-	// node is torn down before its replacement is provisioned.
+	// MaxSurge Controls surge node provisioning during upgrades.
+	// - 0: Sequential upgrade (teardown then provision)
 	MaxSurge *int `json:"maxSurge,omitempty"`
 
-	// Nico Fields fixed at creation (instanceTypeID, partitions, sshKeyGroupIDs) cannot be
-	// sent: a request carrying one is rejected with 400. A body echoed from GET must
-	// have them stripped.
+	// Nico The mutable subset of the Nico node pool fields. `instanceTypeID`,
+	// `infinibandPartitionID`, `nvLinkLogicalPartitionID` and `sshKeyGroupIDs`
+	// are fixed when the pool is created and are therefore absent here: sending
+	// one is rejected with 400. A body echoed from GET must have them stripped.
 	Nico *NicoNodePoolProviderUpdate `json:"nico,omitempty"`
 
-	// ProvisioningMonitorDisabled When true, nodes stuck in provisioning past the timeout are not recycled automatically.
+	// ProvisioningMonitorDisabled Whether the timeout-based provisioning monitor is paused for this node pool.
 	ProvisioningMonitorDisabled *bool `json:"provisioningMonitorDisabled,omitempty"`
 
-	// RecycleBudget Maximum number of nodes recycled at once.
+	// RecycleBudget The maximum number of nodes that can be recycled at once.
 	RecycleBudget *int `json:"recycleBudget,omitempty"`
 
-	// SystemReservedMemory Memory reserved for system daemons. Nodes reserve 16Gi when omitted.
+	// SystemReservedMemory The amount of memory to reserve for system processes (e.g., "16Gi", "128Gi")
 	SystemReservedMemory *string `json:"systemReservedMemory,omitempty"`
 
 	// TeleportEnabled Enable or disable Teleport SSH enrollment for nodes in this pool.
 	TeleportEnabled *bool `json:"teleportEnabled,omitempty"`
 }
 
-// Forbidden Error response body.
+// Forbidden defines model for Forbidden.
 type Forbidden = GenericError
 
-// Unauthorized Error response body.
+// Unauthorized defines model for Unauthorized.
 type Unauthorized = GenericError
 
 // ListClustersParams defines parameters for ListClusters.
@@ -1233,37 +1230,37 @@ type ListClustersParams struct {
 
 // ListNodePoolsParams defines parameters for ListNodePools.
 type ListNodePoolsParams struct {
-	// ClusterID Filter by cluster ID
+	// ClusterID Filter node pools by cluster ID
 	ClusterID *openapi_types.UUID `form:"clusterID,omitempty" json:"clusterID,omitempty"`
 
-	// ClusterName Filter by cluster name (exact match)
+	// ClusterName Filter node pools by cluster name (exact match)
 	ClusterName *string `form:"clusterName,omitempty" json:"clusterName,omitempty"`
 
-	// Name Filter by node pool name (exact match)
+	// Name Filter node pools by name (exact match)
 	Name *string `form:"name,omitempty" json:"name,omitempty"`
 }
 
 // ListNodeSetsParams defines parameters for ListNodeSets.
 type ListNodeSetsParams struct {
-	// NodePoolID Filter by node pool ID
+	// NodePoolID Filter node sets by node pool ID
 	NodePoolID *openapi_types.UUID `form:"nodePoolID,omitempty" json:"nodePoolID,omitempty"`
 }
 
 // ListNodesParams defines parameters for ListNodes.
 type ListNodesParams struct {
-	// ClusterID Filter by cluster ID
+	// ClusterID Filter nodes by cluster ID
 	ClusterID *openapi_types.UUID `form:"clusterID,omitempty" json:"clusterID,omitempty"`
 
-	// NodePoolID Filter by node pool ID
+	// NodePoolID Filter nodes by node pool ID
 	NodePoolID *openapi_types.UUID `form:"nodePoolID,omitempty" json:"nodePoolID,omitempty"`
 
-	// ClusterName Filter by cluster name (exact match)
+	// ClusterName Filter nodes by cluster name
 	ClusterName *string `form:"clusterName,omitempty" json:"clusterName,omitempty"`
 
-	// Name Filter by node name (exact match)
+	// Name Filter nodes by node name
 	Name *string `form:"name,omitempty" json:"name,omitempty"`
 
-	// ControlPlane `true` returns only control-plane nodes; `false` only workers
+	// ControlPlane Filter nodes by control-plane membership (true returns only control-plane nodes, false only workers)
 	ControlPlane *bool `form:"controlPlane,omitempty" json:"controlPlane,omitempty"`
 }
 

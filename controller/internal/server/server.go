@@ -39,7 +39,7 @@ func NewServer(
 	database db.DB,
 	temporalClient client.Client,
 	authn *auth.Authenticator,
-	k8sReader ctrlclient.Reader,
+	k8sClient ctrlclient.Client,
 ) (*http.Server, error) {
 	m := http.NewServeMux()
 
@@ -47,7 +47,7 @@ func NewServer(
 	if err != nil {
 		return nil, fmt.Errorf("failed to load OpenAPI spec: %w", err)
 	}
-	serverImpl := NewServerImpl(cfg, logger, database, temporalClient, k8sReader)
+	serverImpl := NewServerImpl(cfg, logger, database, temporalClient, k8sClient)
 	strictHandler := api.NewStrictHandlerWithOptions(serverImpl, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("OpenAPI StrictServer request error", "error", err)
@@ -188,7 +188,13 @@ func handleError(w http.ResponseWriter, logger *slog.Logger, message string, sta
 	}
 }
 
-func NewServerImpl(cfg config.Config, logger *slog.Logger, database db.DB, temporalClient client.Client, k8sReader ctrlclient.Reader) *serverImpl {
+func NewServerImpl(
+	cfg config.Config,
+	logger *slog.Logger,
+	database db.DB,
+	temporalClient client.Client,
+	k8sClient ctrlclient.Client,
+) *serverImpl {
 	nodePoolService := NewNodePoolService(
 		logger,
 		database,
@@ -197,6 +203,11 @@ func NewServerImpl(cfg config.Config, logger *slog.Logger, database db.DB, tempo
 		cfg.UseControlPlaneControllerForControlPlane(),
 		cfg.MachineDeploymentWorkersEnabled,
 	)
+	nodePoolService.k8sClient = k8sClient
+	nodeSetService := NewNodeSetService(logger, database, temporalClient)
+	nodeSetService.k8sClient = k8sClient
+	nodeService := NewNodeService(logger, database, temporalClient, cfg.UseControlPlaneControllerForControlPlane())
+	nodeService.k8sClient = k8sClient
 
 	return &serverImpl{
 		clusterService: *NewClusterService(
@@ -209,9 +220,9 @@ func NewServerImpl(cfg config.Config, logger *slog.Logger, database db.DB, tempo
 			cfg.UseControlPlaneControllerForControlPlane(),
 		),
 		nodePoolService:      *nodePoolService,
-		nodeSetService:       *NewNodeSetService(logger, database, temporalClient),
-		nodeService:          *NewNodeService(logger, database, cfg.UseControlPlaneControllerForControlPlane()),
-		osProfileService:     *NewOSProfileService(logger, k8sReader),
+		nodeSetService:       *nodeSetService,
+		nodeService:          *nodeService,
+		osProfileService:     *NewOSProfileService(logger, k8sClient),
 		configProfileService: *NewConfigProfileService(cfg, logger),
 	}
 }

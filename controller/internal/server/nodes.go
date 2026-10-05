@@ -10,6 +10,8 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.temporal.io/sdk/client"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/dsx-ai-factory/nke/controller/api"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
@@ -18,8 +20,10 @@ import (
 )
 
 type nodeService struct {
-	logger *slog.Logger
-	db     db.DB
+	logger         *slog.Logger
+	db             db.DB
+	temporalClient client.Client
+	k8sClient      ctrlclient.Client
 
 	// useControlPlaneController makes DeleteNode record a control-plane node
 	// delete as intent for the control-plane controller instead of starting the
@@ -30,11 +34,13 @@ type nodeService struct {
 func NewNodeService(
 	logger *slog.Logger,
 	database db.DB,
+	temporalClient client.Client,
 	useControlPlaneController bool,
 ) *nodeService {
 	return &nodeService{
 		logger:                    logger,
 		db:                        database,
+		temporalClient:            temporalClient,
 		useControlPlaneController: useControlPlaneController,
 	}
 }
@@ -56,10 +62,28 @@ func (s *nodeService) ListNodes(ctx context.Context, req api.ListNodesRequestObj
 	if err != nil {
 		return nil, err
 	}
-	apiNodes := make([]api.Node, len(dbNodes))
+	apiNodes := make([]api.Node, 0, len(dbNodes))
+	seenNames := make(map[string]struct{}, len(dbNodes))
 	for i := range dbNodes {
-		apiNodes[i] = apiNodeFromDB(&dbNodes[i])
-		apiNodes[i].ControlPlaneRollout = rollout[dbNodes[i].ID]
+		node := apiNodeFromDB(&dbNodes[i])
+		node.ControlPlaneRollout = rollout[dbNodes[i].ID]
+		apiNodes = append(apiNodes, node)
+		seenNames[node.Name] = struct{}{}
+	}
+
+	machines, err := s.listMachineDeploymentWorkers(ctx, req.Params)
+	if err != nil {
+		return nil, err
+	}
+	for i := range machines {
+		node := apiNodeFromMachine(&machines[i])
+		if node == nil {
+			continue
+		}
+		if _, exists := seenNames[node.Name]; exists {
+			continue
+		}
+		apiNodes = append(apiNodes, *node)
 	}
 	return api.ListNodes200JSONResponse{Nodes: apiNodes}, nil
 }
@@ -67,10 +91,21 @@ func (s *nodeService) ListNodes(ctx context.Context, req api.ListNodesRequestObj
 func (s *nodeService) GetNode(ctx context.Context, req api.GetNodeRequestObject) (api.GetNodeResponseObject, error) {
 	dbNode, err := s.db.GetNode(ctx, req.NodeID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
+		if !errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("failed to get node: %w", err)
+		}
+		machine, found, err := s.getMachineDeploymentWorker(ctx, req.NodeID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
 			return api.GetNode404Response{}, nil
 		}
-		return nil, fmt.Errorf("failed to get node: %w", err)
+		node := apiNodeFromMachine(machine)
+		if node == nil {
+			return api.GetNode404Response{}, nil
+		}
+		return api.GetNode200JSONResponse(*node), nil
 	}
 
 	rollout, err := controlPlaneRolloutByNode(ctx, s.db, []db.Node{dbNode})
@@ -125,7 +160,17 @@ func (s *nodeService) DeleteNode(ctx context.Context, req api.DeleteNodeRequestO
 		if errors.Is(err, nodes.ErrControlPlaneVIPRequired) {
 			return api.DeleteNode400JSONResponse{Message: err.Error()}, nil
 		}
-		if errors.Is(err, db.ErrNotFound) || errors.Is(err, errClusterNotFound) {
+		if errors.Is(err, db.ErrNotFound) {
+			deleted, deleteErr := s.deleteMachineDeploymentWorker(ctx, req.NodeID, machineHealthIssue)
+			if deleteErr != nil {
+				return nil, deleteErr
+			}
+			if deleted {
+				return api.DeleteNode202Response{}, nil
+			}
+			return api.DeleteNode404Response{}, nil
+		}
+		if errors.Is(err, errClusterNotFound) {
 			return api.DeleteNode404Response{}, nil
 		}
 		return nil, err
