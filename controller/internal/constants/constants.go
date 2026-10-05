@@ -126,6 +126,10 @@ const (
 	NodeConditionTypeNeedsRecycle = "nke.nvidia.com/NeedsRecycle"
 	NodeConditionTypeNeedsRepair  = "nke.nvidia.com/NeedsRepair"
 
+	// NKE-owned CAPI Machine condition types for MachineDeployment workers.
+	MachineConditionTypeNodeAgentReady          = "nke.nvidia.com/NodeAgentReady"
+	MachineConditionTypeKubernetesUnschedulable = "nke.nvidia.com/KubernetesUnschedulable"
+
 	// SPIFFE ID paths expected from SPIRE agents
 	TPMSpireAgentPath                = "/spire/agent/tpm/"
 	DSXIMDSSpireAgentPath            = "/spire/agent/dsx_imds/tenant/"

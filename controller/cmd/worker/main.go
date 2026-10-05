@@ -290,6 +290,18 @@ func main() {
 			logger.Error("Failed to set up node agent health controller", "error", err)
 			os.Exit(1)
 		}
+
+		machineHealthController := capi.NewMachineHealthController(
+			cfg,
+			k8sControllerManager.GetClient(),
+			tenantClientProvider,
+			nodeAgentClient,
+			logger.With("logger", "machine-health-controller"),
+		)
+		if err := machineHealthController.SetupWithManager(k8sControllerManager); err != nil {
+			logger.Error("Failed to set up Machine health controller", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	nodePoolController := nodepool.NewController(
