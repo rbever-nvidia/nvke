@@ -1,0 +1,140 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+package nodeprovisioningmonitor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile"
+	"github.com/dsx-ai-factory/nke/controller/internal/db"
+	"github.com/dsx-ai-factory/nke/controller/internal/metrics"
+	"github.com/dsx-ai-factory/nke/controller/internal/nodes"
+)
+
+func (c *Controller) reconcileLegacy(ctx context.Context, key dbreconcile.Key) (reconcile.Result, error) {
+	result := reconcile.Result{}
+	err := c.db.RunInTx(ctx, func(ctx context.Context, tx db.Tx) error {
+		node, err := tx.GetNodeForUpdate(ctx, key.ID)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				c.logger.Debug("Node not found, skipping provisioning monitor reconciliation", "nodeID", key.ID)
+				return nil
+			}
+			return fmt.Errorf("failed to get node %s: %w", key.ID, err)
+		}
+
+		result, err = c.reconcileLegacyNode(ctx, tx, node)
+		return err
+	})
+	return result, err
+}
+
+func (c *Controller) reconcileLegacyNode(ctx context.Context, tx db.Tx, dbNode db.Node) (reconcile.Result, error) {
+	provisioningAge, shouldRecycle := shouldRecycleProvisioningNode(time.Now(), dbNode, c.cfg.NodeProvisioningTimeout)
+	if !shouldRecycle {
+		if provisioningAge > 0 {
+			return reconcile.Result{RequeueAfter: c.cfg.NodeProvisioningTimeout - provisioningAge}, nil
+		}
+		return reconcile.Result{}, nil
+	}
+
+	_, nodePool, err := nodes.GetNodeContext(ctx, tx, dbNode)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to resolve node context for node %s: %w", dbNode.ID, err)
+	}
+
+	logger := c.logger.With(
+		"clusterID", nodePool.ClusterID,
+		"nodePoolID", nodePool.ID,
+		"nodePoolName", nodePool.Name,
+		"nodeID", dbNode.ID,
+		"nodeName", dbNode.Name,
+		"forgeInstanceID", dbNode.NicoForgeInstanceID(),
+		"forgeMachineID", dbNode.NicoForgeMachineID(),
+		"nodeProvisioningTimeout", c.cfg.NodeProvisioningTimeout.String(),
+		"provisioningAge", provisioningAge.String(),
+	)
+
+	if nodePool.UsesMachineDeployment() {
+		logger.Debug("Node pool uses MachineDeployment lifecycle, skipping legacy provisioning monitor")
+		return reconcile.Result{}, nil
+	}
+
+	if nodePool.ControlPlane {
+		logger.Info("Provisioning monitor does not recycle control plane nodes, skipping stuck-node recycling")
+		return reconcile.Result{}, nil
+	}
+
+	if nodePool.Conditions.Deleting.Status == db.ConditionStatusTrue {
+		logger.Debug("Node pool is being deleted, skipping node recycling")
+		return reconcile.Result{}, nil
+	}
+
+	if nodePool.ProvisioningMonitorDisabled {
+		logger.Info("Provisioning monitor paused for node pool, skipping stuck-node recycling")
+		return reconcile.Result{}, nil
+	}
+
+	cluster, err := tx.GetCluster(ctx, nodePool.ClusterID)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to get cluster for node %s: %w", dbNode.ID, err)
+	}
+
+	logger.Warn("Recycling worker node stuck in provisioning")
+	reason := fmt.Sprintf("Node provisioning exceeded timeout of %s", c.cfg.NodeProvisioningTimeout)
+	err = nodes.DeleteWithTx(ctx, tx, dbNode.ID,
+		nodes.WithReason(reason),
+		// Controller already filters pool/CP; skip live-API guard so recycle
+		// does not take the cluster row lock.
+		nodes.WithSkipLiveDeleteGuard(),
+	)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to recycle node %s stuck provisioning: %w", dbNode.ID, err)
+	}
+
+	metrics.RecordNodeProvisioningGiveup(
+		cluster.NicoSiteID().String(),
+		nodePool.ClusterID.String(),
+		nodePool.ID.String(),
+		cluster.Name,
+		nodePool.Name,
+	)
+
+	return reconcile.Result{}, nil
+}
+
+func shouldRecycleProvisioningNode(now time.Time, node db.Node, timeout time.Duration) (time.Duration, bool) {
+	if node.Conditions.Provisioning.Status != db.ConditionStatusTrue {
+		return 0, false
+	}
+	if node.Conditions.Provisioned.Status == db.ConditionStatusTrue {
+		return 0, false
+	}
+	if node.Conditions.Deleting.Status == db.ConditionStatusTrue {
+		return 0, false
+	}
+
+	// Control-plane nodes only: their join is serialized by the control-plane
+	// controller and handled separately, so stop at ReadyToJoin instead of
+	// counting the serial-join queue wait as stuck host provisioning. Workers
+	// auto-join inline, so keep monitoring them through join (until Provisioned).
+	if node.ControlPlane && node.Conditions.ReadyToJoin.Status == db.ConditionStatusTrue {
+		return 0, false
+	}
+
+	provisioningStartedAt := node.Conditions.Provisioning.LastTransitionTime
+	if provisioningStartedAt.IsZero() {
+		provisioningStartedAt = node.CreatedAt
+	}
+
+	provisioningAge := now.Sub(provisioningStartedAt)
+	shouldRecycle := provisioningAge > timeout
+
+	return provisioningAge, shouldRecycle
+}

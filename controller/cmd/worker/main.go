@@ -271,6 +271,7 @@ func main() {
 			cfg,
 			logger.With("logger", "node-provisioning-monitor"),
 			dbInstance,
+			k8sControllerManager.GetClient(),
 		)
 		if err := nodeProvisioningMonitorController.SetupWithManager(k8sControllerManager); err != nil {
 			logger.Error("Failed to set up node provisioning monitor controller", "error", err)
@@ -307,6 +308,8 @@ func main() {
 		cfg,
 		logger.With("logger", "auto-mode-controller"),
 		dbInstance,
+		k8sControllerManager.GetClient(),
+		tenantClientProvider,
 	)
 	if err := autoModeController.SetupWithManager(k8sControllerManager); err != nil {
 		logger.Error("Failed to set up auto-mode controller", "error", err)

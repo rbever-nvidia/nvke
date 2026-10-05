@@ -77,12 +77,12 @@ func (c *MachineDeletionController) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	authorized, err := c.disruptionAuthorized(ctx, machine)
+	authorized, authorizationReason, err := c.disruptionAuthorized(ctx, machine)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if !authorized {
-		c.logger.Debug("Waiting for worker Machine disruption authorization", "machineNamespace", machine.Namespace, "machineName", machine.Name, "nodeName", machine.Status.NodeRef.Name)
+		c.logger.Debug("Waiting for worker Machine disruption authorization", "machineNamespace", machine.Namespace, "machineName", machine.Name, "nodeName", machine.Status.NodeRef.Name, "reason", authorizationReason)
 		return ctrl.Result{RequeueAfter: machineDeletionAuthorizationRequeue}, nil
 	}
 
@@ -94,7 +94,13 @@ func (c *MachineDeletionController) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("releasing disruption authorization hook on Machine %s/%s: %w", machine.Namespace, machine.Name, err)
 	}
 
-	c.logger.Info("Authorized worker Machine disruption", "machineNamespace", machine.Namespace, "machineName", machine.Name, "nodeName", machine.Status.NodeRef.Name)
+	c.logger.Info(
+		"Authorized worker Machine disruption",
+		"machineNamespace", machine.Namespace,
+		"machineName", machine.Name,
+		"nodeName", machine.Status.NodeRef.Name,
+		"reason", authorizationReason,
+	)
 	return ctrl.Result{}, nil
 }
 
@@ -102,70 +108,73 @@ func (c *MachineDeletionController) Reconcile(ctx context.Context, req ctrl.Requ
 // - node-signal disruption authorization is disabled
 // - explicitly authorized via NKE machine annotation
 // - the Machine never joined
-// - its parent CAPI Cluster, NKE cluster, or node pool is absent or deleting
+// - its parent CAPI Cluster or node pool is absent or deleting
 // - the tenant Node has already been removed
 // - nv-sentinel has placed the termination label on the tenant Node
-func (c *MachineDeletionController) disruptionAuthorized(ctx context.Context, machine *clusterv1.Machine) (bool, error) {
+func (c *MachineDeletionController) disruptionAuthorized(ctx context.Context, machine *clusterv1.Machine) (bool, string, error) {
 	// If node-signal disruption authorization is disabled, normal CAPI Machine deletion is always permitted.
 	if !c.cfg.NodeSignalDisruptionAuthorizationEnabled {
-		return true, nil
+		return true, "node-signal disruption authorization is disabled", nil
 	}
 
 	// Explicit authorization via machine annotation.
 	if _, authorized := machine.Annotations[constants.MachineAnnotationKeyDisruptionAuthorized]; authorized {
-		return true, nil
+		return true, "Machine has explicit disruption authorization", nil
 	}
 
 	// Machine has not joined yet.
 	if machine.Status.NodeRef.Name == "" {
-		return true, nil
+		return true, "Machine has not joined", nil
 	}
 
 	// Machine's parent CAPI Cluster is absent or deleting.
 	cluster := &clusterv1.Cluster{}
 	if err := c.k8sClient.Get(ctx, client.ObjectKey{Namespace: machine.Namespace, Name: machine.Spec.ClusterName}, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil
+			return true, "CAPI Cluster is absent", nil
 		}
-		return false, fmt.Errorf("getting CAPI Cluster for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
+		return false, "", fmt.Errorf("getting CAPI Cluster for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
 	}
 	if !cluster.DeletionTimestamp.IsZero() {
-		return true, nil
+		return true, "CAPI Cluster is deleting", nil
 	}
 
 	// Machine's parent node pool is absent or deleting.
 	nodePoolID, err := uuid.Parse(machine.Labels[constants.LabelKeyNodePoolID])
 	if err != nil {
-		return false, fmt.Errorf("Machine %s/%s has invalid %s label: %w", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID, err)
+		return false, "", fmt.Errorf("Machine %s/%s has invalid %s label: %w", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID, err)
 	}
 	nodePool, err := c.db.GetNodePool(ctx, nodePoolID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return true, nil
+			return true, "node pool is absent", nil
 		}
-		return false, fmt.Errorf("getting node pool %s for Machine %s/%s: %w", nodePoolID, machine.Namespace, machine.Name, err)
+		return false, "", fmt.Errorf("getting node pool %s for Machine %s/%s: %w", nodePoolID, machine.Namespace, machine.Name, err)
 	}
 	if nodePool.Conditions.Deleting.Status == db.ConditionStatusTrue {
-		return true, nil
+		return true, "node pool is deleting", nil
 	}
 	if !nodePool.UsesMachineDeployment() {
-		return false, fmt.Errorf("Machine %s/%s belongs to legacy node pool %s", machine.Namespace, machine.Name, nodePool.ID)
+		return false, "", fmt.Errorf("Machine %s/%s belongs to legacy node pool %s", machine.Namespace, machine.Name, nodePool.ID)
 	}
 
 	// Check if the tenant Node is already absent.
 	tenantClient, err := c.tenantClientProvider.ClientForCluster(ctx, cluster)
 	if err != nil {
-		return false, fmt.Errorf("getting tenant client for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
+		return false, "", fmt.Errorf("getting tenant client for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
 	}
 	node := &corev1.Node{}
 	if err := tenantClient.Get(ctx, client.ObjectKey{Name: machine.Status.NodeRef.Name}, node); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil
+			return true, "tenant Node is absent", nil
 		}
-		return false, fmt.Errorf("getting tenant Node %s for Machine %s/%s: %w", machine.Status.NodeRef.Name, machine.Namespace, machine.Name, err)
+		return false, "", fmt.Errorf("getting tenant Node %s for Machine %s/%s: %w", machine.Status.NodeRef.Name, machine.Namespace, machine.Name, err)
 	}
 
 	// Check if the tenant Node has the termination label.
 	_, authorized := node.Labels[constants.LabelKeyNodeLabelTerminate]
-	return authorized, nil
+	if authorized {
+		return true, "tenant Node has termination label", nil
+	}
+	return false, "", nil
 }

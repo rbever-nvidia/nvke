@@ -39,6 +39,7 @@ func TestController_Reconcile(t *testing.T) {
 			config.Config{},
 			slog.Default(),
 			dbwrapper.New(mockDB, slog.Default()),
+			nil,
 		)
 
 		result, err := controller.Reconcile(context.Background(), dbreconcile.NodeKey(uuid.New()))
@@ -76,6 +77,7 @@ func TestController_Reconcile(t *testing.T) {
 			config.Config{NodeProvisioningTimeout: timeout},
 			slog.Default(),
 			dbwrapper.New(mockDB, slog.Default()),
+			nil,
 		)
 
 		result, err := controller.Reconcile(ctx, dbreconcile.NodeKey(nodeID))
@@ -154,6 +156,7 @@ func TestController_Reconcile(t *testing.T) {
 			config.Config{NodeProvisioningTimeout: timeout},
 			slog.Default(),
 			dbwrapper.New(mockDB, slog.Default()),
+			nil,
 		)
 
 		result, err := controller.Reconcile(ctx, dbreconcile.NodeKey(nodeID))
@@ -195,6 +198,7 @@ func TestController_Reconcile(t *testing.T) {
 			config.Config{NodeProvisioningTimeout: timeout},
 			slog.Default(),
 			dbwrapper.New(mockDB, slog.Default()),
+			nil,
 		)
 		result, err := controller.Reconcile(ctx, dbreconcile.NodeKey(nodeID))
 

@@ -81,7 +81,7 @@ func TestUnit_ReconcileSkipsNodePools(t *testing.T) {
 				mockTx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(params.nodePool, nil)
 			}
 
-			controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+			controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, nil)
 
 			result, err := controller.Reconcile(ctx, dbreconcile.NodePoolKey(nodePoolID))
 
@@ -143,7 +143,7 @@ func TestUnit_ReconcileMarksDeprecatedNodesWithinBudget(t *testing.T) {
 		}),
 	).Return(db.WorkflowOutbox{}, nil)
 
-	controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+	controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, nil)
 
 	result, err := controller.Reconcile(ctx, dbreconcile.NodePoolKey(nodePoolID))
 
@@ -185,7 +185,7 @@ func TestUnit_ReconcileSelfEnqueueIsIdempotent(t *testing.T) {
 		Return(db.WorkflowOutbox{}, nil).
 		Once()
 
-	controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+	controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, nil)
 
 	_, err := controller.Reconcile(ctx, dbreconcile.NodePoolKey(nodePoolID))
 	require.NoError(t, err)
