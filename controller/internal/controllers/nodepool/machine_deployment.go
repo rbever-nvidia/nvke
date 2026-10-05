@@ -10,8 +10,11 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capiconditions "sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -69,6 +72,9 @@ func (a *machineDeploymentReconciler) Reconcile(ctx context.Context, key dbrecon
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("applying MachineDeployment for node pool %s: %w", nodePool.ID, err)
 	}
+	if err := a.updateNodePoolConditions(ctx, &nodePool, machineDeployment); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	a.logger.Debug(
 		"Applied MachineDeployment for node pool",
@@ -79,6 +85,91 @@ func (a *machineDeploymentReconciler) Reconcile(ctx context.Context, key dbrecon
 	)
 
 	return reconcile.Result{}, nil
+}
+
+func (a *machineDeploymentReconciler) updateNodePoolConditions(
+	ctx context.Context,
+	nodePool *db.NodePool,
+	machineDeployment *clusterv1.MachineDeployment,
+) error {
+	desired := nodePool.DesiredCount
+	available := int(ptr.Deref(machineDeployment.Status.AvailableReplicas, 0))
+	actual := int(ptr.Deref(machineDeployment.Status.Replicas, 0))
+	availableCondition := capiconditions.Get(machineDeployment, clusterv1.MachineDeploymentAvailableCondition)
+	converged := machineDeployment.Status.ObservedGeneration == machineDeployment.Generation &&
+		actual == desired &&
+		available >= desired &&
+		availableCondition != nil &&
+		availableCondition.Status == metav1.ConditionTrue
+
+	message := machineDeploymentProgressMessage(nodePool, machineDeployment, actual, available, desired)
+	provisioning := db.Condition{
+		Status:  db.ConditionStatusFromBool(!converged),
+		Message: message,
+	}
+	provisioned := db.Condition{
+		Status:  db.ConditionStatusFromBool(converged),
+		Message: message,
+	}
+
+	previousProvisioning := nodePool.Conditions.Provisioning
+	previousProvisioned := nodePool.Conditions.Provisioned
+	db.SetCondition(&nodePool.Conditions.Provisioning, provisioning)
+	db.SetCondition(&nodePool.Conditions.Provisioned, provisioned)
+	if previousProvisioning.Equal(nodePool.Conditions.Provisioning) &&
+		previousProvisioned.Equal(nodePool.Conditions.Provisioned) {
+		return nil
+	}
+
+	if _, err := a.db.UpdateNodePool(ctx, nodePool); err != nil {
+		return fmt.Errorf("updating MachineDeployment status for node pool %s: %w", nodePool.ID, err)
+	}
+	return nil
+}
+
+func machineDeploymentProgressMessage(
+	nodePool *db.NodePool,
+	machineDeployment *clusterv1.MachineDeployment,
+	actual, available, desired int,
+) string {
+	counts := fmt.Sprintf("%d of %d replicas available", available, desired)
+	if nodePool.AutoProvisionDisabled {
+		return fmt.Sprintf("Automatic provisioning is disabled; %s", counts)
+	}
+	if machineDeployment.Status.ObservedGeneration != machineDeployment.Generation {
+		return fmt.Sprintf(
+			"Waiting for MachineDeployment generation %d to be observed; %s",
+			machineDeployment.Generation,
+			counts,
+		)
+	}
+
+	for _, conditionType := range []string{
+		clusterv1.MachineDeploymentScalingUpCondition,
+		clusterv1.MachineDeploymentScalingDownCondition,
+		clusterv1.MachineDeploymentRollingOutCondition,
+	} {
+		condition := capiconditions.Get(machineDeployment, conditionType)
+		if condition != nil && condition.Status == metav1.ConditionTrue {
+			return fmt.Sprintf("%s; %s", conditionDetail(condition), counts)
+		}
+	}
+
+	availableCondition := capiconditions.Get(machineDeployment, clusterv1.MachineDeploymentAvailableCondition)
+	if availableCondition != nil && availableCondition.Status != metav1.ConditionTrue {
+		return fmt.Sprintf("%s; %s", conditionDetail(availableCondition), counts)
+	}
+	if actual != desired {
+		return fmt.Sprintf("Waiting for MachineDeployment replica count to converge; %s", counts)
+	}
+	return fmt.Sprintf("MachineDeployment is fully available; %s", counts)
+}
+
+func conditionDetail(condition *metav1.Condition) string {
+	if condition.Message != "" {
+		return fmt.Sprintf("%s: %s", condition.Reason, condition.Message)
+	}
+	return condition.Reason
 }
 
 func (a *machineDeploymentReconciler) deleteResources(ctx context.Context, nodePoolID uuid.UUID) error {
