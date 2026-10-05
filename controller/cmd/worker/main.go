@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.uber.org/automaxprocs/maxprocs"
 	"golang.org/x/sync/errgroup"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 
 	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 	enginev1 "github.com/dsx-ai-factory/nke/management-engine/apis/v1"
@@ -218,6 +219,7 @@ func main() {
 		spirev1alpha1.AddToScheme,
 		nicov1.AddToScheme,
 		enginev1.AddToScheme,
+		bootstrapv1.AddToScheme,
 	)
 	if err != nil {
 		logger.Error("Failed to create Kubernetes controller manager", "error", err)
@@ -293,6 +295,8 @@ func main() {
 		cfg,
 		logger.With("logger", "node-pool-controller"),
 		dbInstance,
+		k8sControllerManager.GetClient(),
+		trustDomain,
 	)
 	if err := nodePoolController.SetupWithManager(k8sControllerManager); err != nil {
 		logger.Error("Failed to set up node pool controller", "error", err)
@@ -309,18 +313,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	machineCRDInstalled, err := capi.MachineCRDInstalled(k8sControllerManager.GetRESTMapper())
+	if err != nil {
+		logger.Error("Failed to look up the Cluster API Machine CRD", "error", err)
+		os.Exit(1)
+	}
+
 	logger.Info("Kubernetes controller-runtime manager configuration",
 		"enableNodeProvisioningMonitor", enableNodeProvisioningMonitor,
 		"enableNicoControllers", cfg.NicoControllersEnabled,
 		"enableSpiffe", cfg.SpiffeEnabled,
 		"enableTenantAccess", cfg.TenantAccessEnabled)
-	// Watches Cluster API's Machine, and takes the manager down where Cluster
-	// API is not installed -- the same failure the NicoMachine watch below had.
-	machineCRDInstalled, err := capi.MachineCRDInstalled(k8sControllerManager.GetRESTMapper())
-	if err != nil {
-		logger.Error("Failed to look up the Machine CRD", "error", err)
-		os.Exit(1)
-	}
 	if !machineCRDInstalled {
 		logger.Warn("Cluster API Machine CRD not installed; skipping the machine SPIRE entry controller")
 	}
@@ -555,7 +558,6 @@ func main() {
 		logger.Error("Failed to create Temporal worker", "error", err)
 		os.Exit(1)
 	}
-
 	outboxLogger := logger.With("logger", "outbox-processor")
 	outboxProcessor := temporal.NewOutboxProcessor(cfg, outboxLogger, dbInstance, temporalClient)
 

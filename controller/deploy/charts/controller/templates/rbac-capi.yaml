@@ -10,10 +10,13 @@ rules:
       - cluster.x-k8s.io
     resources:
       - machines
+      - machinedeployments
+      - machinesets
       - clusters
     verbs:
       - create
       - delete
+      - deletecollection
       - get
       - list
       - patch
@@ -44,12 +47,27 @@ rules:
     resources:
       - nicoclusters
       - nicomachines
+      - nicomachinetemplates
       - provisionedclusters
       - provisionedmachines
       - provisionedmachinetemplates
     verbs:
       - create
       - delete
+      - deletecollection
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - bootstrap.cluster.x-k8s.io
+    resources:
+      - kubeadmconfigtemplates
+    verbs:
+      - create
+      - delete
+      - deletecollection
       - get
       - list
       - patch

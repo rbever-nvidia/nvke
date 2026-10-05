@@ -25,7 +25,7 @@ import (
 )
 
 func TestUnit_NewController(t *testing.T) {
-	npc := nodepool.NewController(config.Config{}, slog.Default(), nil)
+	npc := nodepool.NewController(config.Config{}, slog.Default(), nil, nil, "")
 	assert.NotNil(t, npc)
 }
 
@@ -60,7 +60,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -124,7 +124,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -180,7 +180,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 		mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 		mockTx.On("GetNodePoolForUpdate", mock.Anything, poolID).Return(pool, nil)
 
-		npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -355,7 +355,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		mockDB.GetTx = func() db.Tx { return mockTx }
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
@@ -442,7 +442,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -509,7 +509,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -566,7 +566,7 @@ func TestUnit_NodePoolControllerReconcile(t *testing.T) {
 
 		profilesDir := setupProfilesDir(t, configProfile)
 		cfg := config.Config{ProfilesDir: profilesDir}
-		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+		npc := nodepool.NewController(cfg, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 
 		_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 		require.NoError(t, err)
@@ -635,7 +635,7 @@ func TestUnit_NodePoolControllerReconcileCAPIInfraTemplateChange(t *testing.T) {
 	})).Return(updatedNewSet, nil)
 
 	profilesDir := setupProfilesDir(t, "test-config-profile")
-	npc := nodepool.NewController(config.Config{ProfilesDir: profilesDir}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+	npc := nodepool.NewController(config.Config{ProfilesDir: profilesDir}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 	mockDB.GetTx = func() db.Tx { return mockTx }
 
 	_, err = npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))

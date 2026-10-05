@@ -112,6 +112,7 @@ const (
 	MachineAnnotationKeyReboot                  = "nke.nvidia.com/reboot"
 	MachineAnnotationKeyMachineHealthIssue      = "nke.nvidia.com/machine-health-issue"
 	MachineAnnotationKeySpireAgentSpiffeIDPath  = "nke.nvidia.com/spire-agent-spiffe-id-path"
+	MachineAnnotationKeyDisruptionAuthorizationHook = "pre-drain.delete.hook.machine.cluster.x-k8s.io/nke-disruption-authorization"
 
 	LabelValueTerminateStatusInProgress = "InProgress"
 	LabelValueTerminateStatusNotAllowed = "NotAllowed"
@@ -130,10 +131,13 @@ const (
 	JoinTokenAlternateSpireAgentPath = "/join-token-spire-agent/host-id/" //nolint:gosec // This is a SPIFFE path prefix, not a credential.
 
 	CAPISpireAgentConfigPath       = "/etc/spire-agent/agent.conf"
+	CAPIDiscoveryKubeconfigPath    = "/run/nke/capi-discovery-kubeconfig"
+	CAPISpireExecPluginAPIVersion  = "client.authentication.k8s.io/v1"
 	CAPISpireExecPluginCommand     = "/opt/spiffe/bin/k8s-spiffe-workload-jwt-exec-auth"
 	CAPISpireTrustBundlePath       = "/etc/spire-agent/initial-trust-bundle.pem"
 	CAPISpireTrustBundleObjectName = "spire-agent-initial-trust-bundle"
 	CAPISpireTrustBundleSecretKey  = "bundle.pem"
+	CAPIWorkerSpiffeEndpointSocket = "unix:///tmp/spire-agent/public/api.sock"
 	CAPIWorkerJoinSpiffeHint       = "kubeadm-join"
 	CAPIWorkerJoinSpiffeSelector   = "unix:path:" + CAPISpireExecPluginCommand
 )
