@@ -162,23 +162,17 @@ func apiConditionsFromMachine(machine *clusterv1.Machine) api.NodeConditions {
 	bootstrapReady := machineConditionFromMachine(machine, clusterv1.MachineBootstrapConfigReadyCondition, fallbackTime)
 	deleting := !machine.DeletionTimestamp.IsZero() ||
 		machineConditionStatus(machine, clusterv1.MachineDeletingCondition) == db.ConditionStatusTrue
+	deletingCondition := boolCondition(deleting, fallbackTime)
+	if condition, ok := machineConditionFromMachineWithReason(machine, clusterv1.MachineDeletingCondition); ok {
+		deletingCondition = condition
+	}
 	joined := machine.Status.NodeRef.IsDefined()
 	provisioned := joined && nodeReady.Status == db.ConditionStatusTrue
 	pending := !deleting && !joined && machine.Spec.ProviderID == ""
 	provisioning := !deleting && !pending && !provisioned
 	provisioningCondition := boolCondition(provisioning, fallbackTime)
-	for _, condition := range machine.Status.Conditions {
-		if condition.Type == constants.MachineConditionTypeProvisioning {
-			provisioningCondition = machineConditionFromMachine(machine, constants.MachineConditionTypeProvisioning, fallbackTime)
-			provisioningCondition.Message = condition.Reason
-			if condition.Message != "" {
-				if provisioningCondition.Message != "" {
-					provisioningCondition.Message += ": "
-				}
-				provisioningCondition.Message += condition.Message
-			}
-			break
-		}
+	if condition, ok := machineConditionFromMachineWithReason(machine, constants.MachineConditionTypeProvisioning); ok {
+		provisioningCondition = condition
 	}
 
 	return api.NodeConditions{
@@ -189,7 +183,7 @@ func apiConditionsFromMachine(machine *clusterv1.Machine) api.NodeConditions {
 		Joined:              apiConditionFromDB(boolCondition(joined, fallbackTime)),
 		Provisioned:         apiConditionFromDB(boolCondition(provisioned, fallbackTime)),
 		DeleteRequested:     apiConditionFromDB(boolCondition(deleting, fallbackTime)),
-		Deleting:            apiConditionFromDB(boolCondition(deleting, fallbackTime)),
+		Deleting:            apiConditionFromDB(deletingCondition),
 		KubernetesReady:     apiConditionFromDB(nodeReady),
 		KubernetesUnschedulable: apiConditionFromDB(machineConditionFromMachine(
 			machine,
@@ -216,6 +210,28 @@ func apiConditionsFromMachine(machine *clusterv1.Machine) api.NodeConditions {
 			fallbackTime,
 		)),
 	}
+}
+
+func machineConditionFromMachineWithReason(machine *clusterv1.Machine, conditionType string) (db.Condition, bool) {
+	for _, condition := range machine.Status.Conditions {
+		if condition.Type != conditionType {
+			continue
+		}
+
+		message := condition.Reason
+		if condition.Message != "" {
+			if message != "" {
+				message += ": "
+			}
+			message += condition.Message
+		}
+		return db.Condition{
+			Status:             machineConditionStatus(machine, conditionType),
+			Message:            message,
+			LastTransitionTime: condition.LastTransitionTime.Time,
+		}, true
+	}
+	return db.Condition{}, false
 }
 
 func boolCondition(value bool, at time.Time) db.Condition {
