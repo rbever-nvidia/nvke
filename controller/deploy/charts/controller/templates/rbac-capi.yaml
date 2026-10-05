@@ -22,6 +22,14 @@ rules:
       - patch
       - update
       - watch
+  - apiGroups:
+      - cluster.x-k8s.io
+    resources:
+      - machines/status
+    verbs:
+      - get
+      - patch
+      - update
   # The tenant-access controller owns each tenant's kubeconfig Secret by the
   # CAPI Cluster, and OwnerReferencesPermissionEnforcement requires `update` on
   # the owner's finalizers subresource before it will accept an ownerReference

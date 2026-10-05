@@ -21,6 +21,7 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile/dbwrapper"
 	dbfilters "github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile/filters"
+	"github.com/dsx-ai-factory/nke/controller/internal/kube"
 )
 
 // Controller watches nodes that are in provisioning
@@ -29,6 +30,7 @@ type Controller struct {
 	cfg       config.Config
 	db        *dbwrapper.DB
 	k8sClient client.Client
+	tenantClientProvider kube.TenantClientProvider
 	logger    *slog.Logger
 }
 
@@ -37,11 +39,13 @@ func NewController(
 	logger *slog.Logger,
 	dbInstance *dbwrapper.DB,
 	k8sClient client.Client,
+	tenantClientProvider kube.TenantClientProvider,
 ) *Controller {
 	return &Controller{
 		cfg:       cfg,
 		db:        dbInstance,
 		k8sClient: k8sClient,
+		tenantClientProvider: tenantClientProvider,
 		logger:    logger,
 	}
 }

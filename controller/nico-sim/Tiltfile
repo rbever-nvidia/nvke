@@ -163,6 +163,26 @@ def register(ctx):
     # Ensure .dev directories and seed files exist.
     local("mkdir -p %s/logs %s/instances && touch %s/nico-vms-targets.json" % (_dev, _dev, _dev))
 
+    # FIXME: POC ONLY — CAPI M3 story 1 must deliver this as a versioned Debian
+    # package before MachineDeployment workers are supported in production.
+    # This restores the v12 POC artifact delivery without restoring its
+    # MachinePreJoinController, bootstrap gate, or node-agent binary streaming.
+    _spiffe_exec_auth_image = "ghcr.io/spiffe/k8s-spiffe-workload-jwt-exec-auth:0.3.0@sha256:6402624276b66ef7a733e126488397c9cf33c6706ee1f52a9c7ffad2a540aa7c"
+    _spiffe_exec_auth_path = os.path.join(_dev, "files", "spiffe", "k8s-spiffe-workload-jwt-exec-auth")
+    local_resource(
+        "nico-sim-spiffe-exec-auth",
+        cmd=["bash", "-c", """
+          set -euo pipefail
+          mkdir -p "$(dirname "%s")"
+          rm -f "%s"
+          container="$(docker create "%s")"
+          trap 'docker rm -f "${container}" >/dev/null 2>&1 || true' EXIT
+          docker cp "${container}:/ko-app/cmd" "%s"
+          chmod 0755 "%s"
+        """ % (_spiffe_exec_auth_path, _spiffe_exec_auth_path, _spiffe_exec_auth_image, _spiffe_exec_auth_path, _spiffe_exec_auth_path)],
+        labels=["5-nico-sim"],
+    )
+
     # -----------------------------------------------------------------------
     # Observability stack (Loki + Promtail DaemonSet + Grafana in K8s)
     #
@@ -266,7 +286,7 @@ def register(ctx):
     _dnsmasq_available = False
     if _vm_backend_enabled:
         _dnsmasq_available = str(local("command -v dnsmasq >/dev/null 2>&1 && echo yes || echo no", quiet=True)).strip() == "yes"
-    _nico_sim_deps = ["check-management-cluster"]
+    _nico_sim_deps = ["check-management-cluster", "nico-sim-spiffe-exec-auth"]
 
     if _container_backend_enabled and "nico" in ctx.cfg.get("providers", []):
         _nico_sim_deps.append("nico-kind-node-image")

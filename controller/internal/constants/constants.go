@@ -127,6 +127,7 @@ const (
 	NodeConditionTypeNeedsRepair  = "nke.nvidia.com/NeedsRepair"
 
 	// NKE-owned CAPI Machine condition types for MachineDeployment workers.
+	MachineConditionTypeProvisioning           = "nke.nvidia.com/Provisioning"
 	MachineConditionTypeNodeAgentReady          = "nke.nvidia.com/NodeAgentReady"
 	MachineConditionTypeKubernetesUnschedulable = "nke.nvidia.com/KubernetesUnschedulable"
 

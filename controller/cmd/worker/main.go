@@ -272,6 +272,7 @@ func main() {
 			logger.With("logger", "node-provisioning-monitor"),
 			dbInstance,
 			k8sControllerManager.GetClient(),
+			tenantClientProvider,
 		)
 		if err := nodeProvisioningMonitorController.SetupWithManager(k8sControllerManager); err != nil {
 			logger.Error("Failed to set up node provisioning monitor controller", "error", err)

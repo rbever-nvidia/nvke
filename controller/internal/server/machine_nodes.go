@@ -166,11 +166,25 @@ func apiConditionsFromMachine(machine *clusterv1.Machine) api.NodeConditions {
 	provisioned := joined && nodeReady.Status == db.ConditionStatusTrue
 	pending := !deleting && !joined && machine.Spec.ProviderID == ""
 	provisioning := !deleting && !pending && !provisioned
+	provisioningCondition := boolCondition(provisioning, fallbackTime)
+	for _, condition := range machine.Status.Conditions {
+		if condition.Type == constants.MachineConditionTypeProvisioning {
+			provisioningCondition = machineConditionFromMachine(machine, constants.MachineConditionTypeProvisioning, fallbackTime)
+			provisioningCondition.Message = condition.Reason
+			if condition.Message != "" {
+				if provisioningCondition.Message != "" {
+					provisioningCondition.Message += ": "
+				}
+				provisioningCondition.Message += condition.Message
+			}
+			break
+		}
+	}
 
 	return api.NodeConditions{
 		Pending:             apiConditionFromDB(boolCondition(pending, fallbackTime)),
 		ProvisioningClaimed: apiConditionFromDB(boolCondition(!pending, fallbackTime)),
-		Provisioning:        apiConditionFromDB(boolCondition(provisioning, fallbackTime)),
+		Provisioning:        apiConditionFromDB(provisioningCondition),
 		ReadyToJoin:         apiConditionFromDB(bootstrapReady),
 		Joined:              apiConditionFromDB(boolCondition(joined, fallbackTime)),
 		Provisioned:         apiConditionFromDB(boolCondition(provisioned, fallbackTime)),
