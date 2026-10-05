@@ -364,7 +364,10 @@ spec:
 	}
 }
 
-func kubeletConfigurationPatch(systemReservedMemory, kubeReservedMemory string) File {
+// KubeletConfigurationPatch returns the kubeadm patch file that pins a node's
+// kubelet memory reservations. The CAPI path puts the same patch in a
+// KubeadmConfig, where CABPK rather than the agent drives kubeadm.
+func KubeletConfigurationPatch(systemReservedMemory, kubeReservedMemory string) File {
 	if systemReservedMemory == "" {
 		systemReservedMemory = defaultSystemReservedMemory
 	}

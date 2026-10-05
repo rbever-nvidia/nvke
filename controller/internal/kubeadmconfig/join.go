@@ -157,7 +157,7 @@ func (config *JoinConfig) Render() (*BootstrapArtifacts, error) {
 
 	artifacts := &BootstrapArtifacts{
 		ConfigYAML: configYAML,
-		Files:      []File{kubeletConfigurationPatch(config.SystemReservedMemory, config.KubeReservedMemory)},
+		Files:      []File{KubeletConfigurationPatch(config.SystemReservedMemory, config.KubeReservedMemory)},
 	}
 
 	if config.ControlPlane {

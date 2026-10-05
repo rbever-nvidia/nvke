@@ -332,6 +332,11 @@ type Config struct {
 	// their stored lifecycle owner.
 	MachineDeploymentWorkersEnabled bool `env:"MACHINE_DEPLOYMENT_WORKERS_ENABLED" default:"false"`
 
+	// NodeSignalDisruptionAuthorizationEnabled makes Machine deletion wait for
+	// authorization through the tenant Node termination label protocol. When
+	// disabled, NKE releases its hook immediately and CAPI drains normally.
+	NodeSignalDisruptionAuthorizationEnabled bool `env:"NODE_SIGNAL_DISRUPTION_AUTHORIZATION_ENABLED" default:"true"`
+
 	// InstallCNIAfterInit installs CNI after kubeadm init, from a Debian package
 	// rather than a bundle server. It needs the charts package on the node, which
 	// Forge user-data installs as of #398.

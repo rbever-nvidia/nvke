@@ -112,6 +112,7 @@ const (
 	MachineAnnotationKeyReboot                  = "nke.nvidia.com/reboot"
 	MachineAnnotationKeyMachineHealthIssue      = "nke.nvidia.com/machine-health-issue"
 	MachineAnnotationKeySpireAgentSpiffeIDPath  = "nke.nvidia.com/spire-agent-spiffe-id-path"
+	MachineAnnotationKeyDisruptionAuthorized    = "nke.nvidia.com/disruption-authorized"
 	MachineAnnotationKeyDisruptionAuthorizationHook = "pre-drain.delete.hook.machine.cluster.x-k8s.io/nke-disruption-authorization"
 
 	LabelValueTerminateStatusInProgress = "InProgress"

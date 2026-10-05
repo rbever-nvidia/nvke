@@ -115,7 +115,7 @@ func (config *InitConfig) Render() (*BootstrapArtifacts, error) {
 	artifacts := &BootstrapArtifacts{
 		ConfigYAML: configYAML,
 		Files: []File{
-			kubeletConfigurationPatch(cfg.SystemReservedMemory, cfg.KubeReservedMemory),
+			KubeletConfigurationPatch(cfg.SystemReservedMemory, cfg.KubeReservedMemory),
 			apiServerTerminationGracePatch(),
 			apiServerAuditPolicyFile(),
 		},

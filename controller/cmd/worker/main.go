@@ -342,6 +342,18 @@ func main() {
 		}
 	}
 
+	machineDeletionController := capi.NewMachineDeletionController(
+		cfg,
+		k8sControllerManager.GetClient(),
+		dbInstance,
+		tenantClientProvider,
+		logger.With("logger", "machine-deletion-controller"),
+	)
+	if err := machineDeletionController.SetupWithManager(k8sControllerManager); err != nil {
+		logger.Error("Failed to set up machine deletion controller", "error", err)
+		os.Exit(1)
+	}
+
 	if !cfg.NicoControllersEnabled {
 		logger.Info("NICo controllers disabled by configuration")
 	} else {

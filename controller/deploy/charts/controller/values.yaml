@@ -85,6 +85,8 @@ controllers:
 workers:
   # -- Use MachineDeployment as the lifecycle owner for newly created worker node pools.
   machineDeploymentEnabled: false
+  # -- Wait for nv-sentinel or another NKE authorization source before CAPI drains a deleting worker Machine.
+  nodeSignalDisruptionAuthorizationEnabled: true
 
 nodeAgent:
   # -- SPIRE node attestation method pinned to newly created nodes. Changing
