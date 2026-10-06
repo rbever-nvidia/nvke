@@ -128,6 +128,7 @@ const (
 
 	// NKE-owned CAPI Machine condition types for MachineDeployment workers.
 	MachineConditionTypeProvisioning           = "nke.nvidia.com/Provisioning"
+	MachineConditionReasonProvisioningComplete = "ProvisioningComplete"
 	MachineConditionTypeNodeAgentReady          = "nke.nvidia.com/NodeAgentReady"
 	MachineConditionTypeKubernetesUnschedulable = "nke.nvidia.com/KubernetesUnschedulable"
 

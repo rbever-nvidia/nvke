@@ -121,6 +121,13 @@ func (c *Controller) machineProvisioningCondition(ctx context.Context, machine *
 		return provisioningCondition(machine, metav1.ConditionFalse, "MachineDeleting", "Machine deletion is in progress"), nil
 	}
 
+	current := capiconditions.Get(machine, constants.MachineConditionTypeProvisioning)
+	if current != nil &&
+		current.Status == metav1.ConditionFalse &&
+		current.Reason == constants.MachineConditionReasonProvisioningComplete {
+		return *current, nil
+	}
+
 	bootstrapReady := capiconditions.Get(machine, clusterv1.MachineBootstrapConfigReadyCondition)
 	if bootstrapReady == nil || bootstrapReady.Status != metav1.ConditionTrue {
 		return provisioningCondition(
@@ -144,7 +151,12 @@ func (c *Controller) machineProvisioningCondition(ctx context.Context, machine *
 	if machine.Status.NodeRef.IsDefined() {
 		nodeReady := capiconditions.Get(machine, clusterv1.MachineNodeReadyCondition)
 		if nodeReady != nil && nodeReady.Status == metav1.ConditionTrue {
-			return provisioningCondition(machine, metav1.ConditionFalse, "ProvisioningComplete", "Kubernetes Node is ready"), nil
+			return provisioningCondition(
+				machine,
+				metav1.ConditionFalse,
+				constants.MachineConditionReasonProvisioningComplete,
+				"Kubernetes Node completed initial provisioning",
+			), nil
 		}
 		return provisioningCondition(
 			machine,
