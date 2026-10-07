@@ -1050,6 +1050,10 @@ _cwe_spire_attestation_method = os.getenv(
     "NODE_AGENT_SPIRE_ATTESTATION_METHOD",
     _tilt_env.get("NODE_AGENT_SPIRE_ATTESTATION_METHOD", ""))
 
+_cwe_node_signal_disruption_authorization_enabled = os.getenv(
+    "NODE_SIGNAL_DISRUPTION_AUTHORIZATION_ENABLED",
+    _tilt_env.get("NODE_SIGNAL_DISRUPTION_AUTHORIZATION_ENABLED", ""))
+
 _cwe_chart_flags = [
     "--create-namespace",
     "--set", "cni.installAfterInit=%s" % ("true" if _cwe_install_cni_after_init == "true" else "false"),
@@ -1079,6 +1083,12 @@ _cwe_chart_flags = [
 if _cwe_spire_attestation_method != "":
     _cwe_chart_flags += [
         "--set-string", "nodeAgent.spireAttestationMethod=%s" % _cwe_spire_attestation_method,
+    ]
+
+if _cwe_node_signal_disruption_authorization_enabled != "":
+    _cwe_chart_flags += [
+        "--set",
+        "workers.nodeSignalDisruptionAuthorizationEnabled=%s" % ("true" if _cwe_node_signal_disruption_authorization_enabled == "true" else "false"),
     ]
 
 if CWE_IMAGE:

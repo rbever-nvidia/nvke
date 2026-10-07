@@ -5,6 +5,7 @@ package noderemediation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -13,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,13 +34,16 @@ import (
 // Reconciler starts node remediation workflows from tenant Kubernetes Node labels.
 type Reconciler struct {
 	clusterID  uuid.UUID
+	cfg        config.Config
 	db         *dbwrapper.DB
 	client     ctrlclient.Client
+	k8sClient  ctrlclient.Client
+	logger     *slog.Logger
 	remediator *nodeRemediator
 }
 
 // NewRegistrar returns a tenant-manager registrar for Kubernetes Node remediation.
-func NewRegistrar(cfg config.Config, database *dbwrapper.DB, controllerTemporalClient workflowStarter, logger *slog.Logger) tenant.Registrar {
+func NewRegistrar(cfg config.Config, database *dbwrapper.DB, k8sClient ctrlclient.Client, cweTemporalClient workflowStarter, logger *slog.Logger) tenant.Registrar {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -46,9 +51,12 @@ func NewRegistrar(cfg config.Config, database *dbwrapper.DB, controllerTemporalC
 		controllerName, controllerOptions := controllerRegistration(clusterID)
 		reconciler := &Reconciler{
 			clusterID:  clusterID,
+			cfg:        cfg,
 			db:         database,
 			client:     manager.GetClient(),
-			remediator: newNodeRemediator(cfg, logger.With("controller", "tenant-node-remediation", "clusterID", clusterID), controllerTemporalClient),
+			k8sClient:  k8sClient,
+			logger:     logger.With("controller", "tenant-node-remediation", "clusterID", clusterID),
+			remediator: newNodeRemediator(cfg, logger.With("controller", "tenant-node-remediation", "clusterID", clusterID), cweTemporalClient),
 		}
 
 		return ctrl.NewControllerManagedBy(manager).
@@ -92,6 +100,9 @@ func nodeHasRemediationRequest(object ctrlclient.Object) bool {
 	if _, hasRebootRequest := labels[constants.LabelKeyNodeLabelReboot]; hasRebootRequest {
 		return true
 	}
+	if nodeNeedsRecycle(node) {
+		return true
+	}
 	_, hasMachineHealthIssue := node.GetAnnotations()[constants.NodeAnnotationKeyMachineHealthIssue]
 	return hasMachineHealthIssue
 }
@@ -107,7 +118,13 @@ func nodeRemediationRequestChanged(oldObject, newObject ctrlclient.Object) bool 
 	}
 	return oldNode.GetLabels()[constants.LabelKeyNodeLabelTerminate] != newNode.GetLabels()[constants.LabelKeyNodeLabelTerminate] ||
 		oldNode.GetLabels()[constants.LabelKeyNodeLabelReboot] != newNode.GetLabels()[constants.LabelKeyNodeLabelReboot] ||
+		nodeNeedsRecycle(oldNode) != nodeNeedsRecycle(newNode) ||
 		oldNode.GetAnnotations()[constants.NodeAnnotationKeyMachineHealthIssue] != newNode.GetAnnotations()[constants.NodeAnnotationKeyMachineHealthIssue]
+}
+
+func nodeNeedsRecycle(node *corev1.Node) bool {
+	needsRecycle, _ := hasNeedsRecycleNodeCondition(node)
+	return needsRecycle
 }
 
 func controllerRegistration(clusterID uuid.UUID) (string, controller.Options) {
@@ -128,27 +145,77 @@ func nodeRequestsForDBNode(_ context.Context, node db.Node) ([]reconcile.Request
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	nodes, err := r.db.ListNodes(ctx, db.NodeFilters{ClusterID: &r.clusterID, Name: &request.Name})
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("listing CWE node %s for cluster %s: %w", request.Name, r.clusterID, err)
-	}
-	if len(nodes) == 0 {
-		return reconcile.Result{}, nil
-	}
-	dbNode := nodes[0]
-
 	kubeNode := &corev1.Node{}
-	err = r.client.Get(ctx, types.NamespacedName{Name: request.Name}, kubeNode)
+	err := r.client.Get(ctx, types.NamespacedName{Name: request.Name}, kubeNode)
 	if apierrors.IsNotFound(err) {
 		return reconcile.Result{}, nil
 	}
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("getting tenant Kubernetes Node %s for cluster %s: %w", request.Name, r.clusterID, err)
 	}
-
-	if err := r.remediator.startWorkflowsIfNecessary(ctx, dbNode, kubeNode); err != nil {
-		return reconcile.Result{}, fmt.Errorf("processing node remediation for node %s: %w", dbNode.ID, err)
+	if !nodeHasRemediationRequest(kubeNode) {
+		return reconcile.Result{}, nil
 	}
 
-	return reconcile.Result{}, nil
+	machine, err := r.machineForTenantNode(ctx, request.Name)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("getting Machine for tenant Node %s: %w", request.Name, err)
+	}
+
+	nodePool, err := r.nodePoolForMachine(ctx, machine)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("getting node pool for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
+	}
+
+	switch nodePool.LifecycleMode {
+	case db.NodePoolLifecycleModeMachineDeployment:
+		return r.remediateMachineDeploymentWorker(ctx, kubeNode, machine)
+	case db.NodePoolLifecycleModeLegacy:
+		return r.remediateLegacyWorker(ctx, kubeNode)
+	default:
+		return reconcile.Result{}, fmt.Errorf("unsupported node pool lifecycle %s for Machine %s/%s", nodePool.LifecycleMode, machine.Namespace, machine.Name)
+	}
+}
+
+func (r *Reconciler) machineForTenantNode(ctx context.Context, nodeName string) (*clusterv1.Machine, error) {
+	cluster, err := r.db.GetCluster(ctx, r.clusterID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("cluster %s not found", r.clusterID)
+		}
+		return nil, fmt.Errorf("getting cluster %s: %w", r.clusterID, err)
+	}
+
+	machines := &clusterv1.MachineList{}
+	if err := r.k8sClient.List(
+		ctx,
+		machines,
+		ctrlclient.InNamespace(constants.NamespaceNKESystem),
+		ctrlclient.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name},
+	); err != nil {
+		return nil, fmt.Errorf("listing CAPI Machines for cluster %s: %w", cluster.Name, err)
+	}
+
+	for i := range machines.Items {
+		machine := &machines.Items[i]
+		if machine.Status.NodeRef.Name == nodeName {
+			return machine, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no Machine found for tenant Node %s in cluster %s", nodeName, cluster.Name)
+}
+
+func (r *Reconciler) nodePoolForMachine(ctx context.Context, machine *clusterv1.Machine) (db.NodePool, error) {
+	nodePoolIDValue := machine.Labels[constants.LabelKeyNodePoolID]
+	if nodePoolIDValue == "" {
+		return db.NodePool{}, fmt.Errorf("Machine %s/%s has no %s label", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID)
+	}
+
+	nodePoolID, err := uuid.Parse(nodePoolIDValue)
+	if err != nil {
+		return db.NodePool{}, fmt.Errorf("Machine %s/%s has invalid %s label: %w", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID, err)
+	}
+
+	return r.db.GetNodePool(ctx, nodePoolID)
 }

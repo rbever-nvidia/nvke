@@ -15,9 +15,11 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -132,9 +134,24 @@ func TestUnit_ReconcileStartsNodeRemediationWorkflows(t *testing.T) {
 	for name, params := range tests {
 		t.Run(name, func(t *testing.T) {
 			clusterID := uuid.New()
+			nodePoolID := uuid.New()
 			nodeID := uuid.New()
 			nodeName := "worker-1"
+			clusterName := "cluster-1"
 			dbNode := db.Node{ID: nodeID, ClusterID: clusterID, Name: nodeName}
+			machine := &clusterv1.Machine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-machine",
+					Namespace: constants.NamespaceNKESystem,
+					Labels: map[string]string{
+						clusterv1.ClusterNameLabel:   clusterName,
+						constants.LabelKeyNodePoolID: nodePoolID.String(),
+					},
+				},
+				Status: clusterv1.MachineStatus{
+					NodeRef: clusterv1.MachineNodeReference{Name: nodeName},
+				},
+			}
 			kubeNode := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        nodeName,
@@ -144,13 +161,18 @@ func TestUnit_ReconcileStartsNodeRemediationWorkflows(t *testing.T) {
 			}
 
 			database := &testutil.MockDB{}
+			database.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID, Name: clusterName}, nil).Once()
+			database.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{
+				ID:            nodePoolID,
+				LifecycleMode: db.NodePoolLifecycleModeLegacy,
+			}, nil).Once()
 			database.On("ListNodes", mock.Anything, mock.MatchedBy(func(filters db.NodeFilters) bool {
 				return filters.ClusterID != nil && *filters.ClusterID == clusterID &&
 					filters.Name != nil && *filters.Name == nodeName
 			})).Return([]db.Node{dbNode}, nil).Once()
 
 			workflowClient := &recordingWorkflowStarter{}
-			reconciler := newTestReconciler(t, clusterID, database, workflowClient, kubeNode)
+			reconciler := newTestReconciler(t, clusterID, database, workflowClient, []runtime.Object{kubeNode}, machine)
 
 			result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 			require.NoError(t, err)
@@ -170,16 +192,13 @@ func TestUnit_ReconcileStartsNodeRemediationWorkflows(t *testing.T) {
 
 func TestUnit_ReconcileSkipsNodeWithoutRemediationLabels(t *testing.T) {
 	clusterID := uuid.New()
-	nodeID := uuid.New()
 	nodeName := "worker-1"
-	dbNode := db.Node{ID: nodeID, ClusterID: clusterID, Name: nodeName}
 	kubeNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
 
 	database := &testutil.MockDB{}
-	database.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{dbNode}, nil).Once()
 
 	workflowClient := &recordingWorkflowStarter{}
-	reconciler := newTestReconciler(t, clusterID, database, workflowClient, kubeNode)
+	reconciler := newTestReconciler(t, clusterID, database, workflowClient, []runtime.Object{kubeNode})
 
 	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 	require.NoError(t, err)
@@ -190,15 +209,12 @@ func TestUnit_ReconcileSkipsNodeWithoutRemediationLabels(t *testing.T) {
 
 func TestUnit_ReconcileSkipsDeletedKubernetesNode(t *testing.T) {
 	clusterID := uuid.New()
-	nodeID := uuid.New()
 	nodeName := "worker-1"
-	dbNode := db.Node{ID: nodeID, ClusterID: clusterID, Name: nodeName}
 
 	database := &testutil.MockDB{}
-	database.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{dbNode}, nil).Once()
 
 	workflowClient := &recordingWorkflowStarter{}
-	reconciler := newTestReconciler(t, clusterID, database, workflowClient)
+	reconciler := newTestReconciler(t, clusterID, database, workflowClient, nil)
 
 	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 	require.NoError(t, err)
@@ -207,21 +223,263 @@ func TestUnit_ReconcileSkipsDeletedKubernetesNode(t *testing.T) {
 	require.Empty(t, workflowClient.calls)
 }
 
-func newTestReconciler(t *testing.T, clusterID uuid.UUID, database *testutil.MockDB, workflowClient *recordingWorkflowStarter, kubeObjects ...runtime.Object) *Reconciler {
+func TestUnit_ReconcileDeletesMachineDeploymentWorkerOnTerminateLabel(t *testing.T) {
+	clusterID := uuid.New()
+	nodePoolID := uuid.New()
+	nodeName := "worker-1"
+	clusterName := "cluster-1"
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-machine",
+			Namespace: constants.NamespaceNKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:   clusterName,
+				constants.LabelKeyNodePoolID: nodePoolID.String(),
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: clusterv1.GroupVersion.String(),
+				Kind:       "MachineSet",
+				Name:       "worker-machineset",
+			}},
+		},
+		Status: clusterv1.MachineStatus{
+			NodeRef: clusterv1.MachineNodeReference{Name: nodeName},
+		},
+	}
+	kubeNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Labels: map[string]string{
+				constants.LabelKeyNodeLabelTerminate: "replace-node",
+			},
+		},
+	}
+
+	database := &testutil.MockDB{}
+	database.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID, Name: clusterName}, nil).Once()
+	database.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{
+		ID:            nodePoolID,
+		LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+	}, nil).Once()
+
+	workflowClient := &recordingWorkflowStarter{}
+	reconciler := newTestReconciler(t, clusterID, database, workflowClient, []runtime.Object{kubeNode}, machine)
+
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	require.NoError(t, err)
+	require.Empty(t, result)
+	database.AssertExpectations(t)
+	require.Empty(t, workflowClient.calls)
+
+	got := &clusterv1.Machine{}
+	err = reconciler.k8sClient.Get(context.Background(), types.NamespacedName{Namespace: constants.NamespaceNKESystem, Name: machine.Name}, got)
+	require.True(t, apierrors.IsNotFound(err))
+}
+
+func TestUnit_ReconcileAnnotatesMachineDeploymentWorkerOnRebootLabel(t *testing.T) {
+	clusterID := uuid.New()
+	nodePoolID := uuid.New()
+	nodeName := "worker-1"
+	clusterName := "cluster-1"
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-machine",
+			Namespace: constants.NamespaceNKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:   clusterName,
+				constants.LabelKeyNodePoolID: nodePoolID.String(),
+			},
+		},
+		Status: clusterv1.MachineStatus{
+			NodeRef: clusterv1.MachineNodeReference{Name: nodeName},
+		},
+	}
+	kubeNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Labels: map[string]string{
+				constants.LabelKeyNodeLabelReboot: "operator-request",
+			},
+		},
+	}
+
+	database := &testutil.MockDB{}
+	database.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID, Name: clusterName}, nil).Once()
+	database.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{
+		ID:            nodePoolID,
+		LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+	}, nil).Once()
+
+	workflowClient := &recordingWorkflowStarter{}
+	reconciler := newTestReconciler(t, clusterID, database, workflowClient, []runtime.Object{kubeNode}, machine)
+
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	require.NoError(t, err)
+	require.Empty(t, result)
+	database.AssertExpectations(t)
+	require.Empty(t, workflowClient.calls)
+
+	got := &clusterv1.Machine{}
+	require.NoError(t, reconciler.k8sClient.Get(context.Background(), types.NamespacedName{Namespace: constants.NamespaceNKESystem, Name: machine.Name}, got))
+	require.NotEmpty(t, got.Annotations[constants.MachineAnnotationKeyReboot])
+
+	node := &corev1.Node{}
+	require.NoError(t, reconciler.client.Get(context.Background(), types.NamespacedName{Name: nodeName}, node))
+	require.NotContains(t, node.Labels, constants.LabelKeyNodeLabelReboot)
+	require.NotEmpty(t, node.Labels[constants.LabelKeyNodeLabelRebootStarted])
+	require.Equal(t, string(constants.RebootStatusCAPIRebootStarted), node.Labels[constants.LabelKeyNodeLabelRebootStatus])
+	require.NotEmpty(t, node.Labels[constants.LabelKeyNodeLabelRebootStatusTimestamp])
+	require.NotContains(t, node.Labels[constants.LabelKeyNodeLabelRebootStarted], ":")
+	require.NotContains(t, node.Labels[constants.LabelKeyNodeLabelRebootStatusTimestamp], ":")
+}
+
+func TestUnit_ReconcileDeletesMachineDeploymentWorkerOnNeedsRecycleWhenNodeSignalDisabled(t *testing.T) {
+	clusterID := uuid.New()
+	nodePoolID := uuid.New()
+	nodeName := "worker-1"
+	clusterName := "cluster-1"
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-machine",
+			Namespace: constants.NamespaceNKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:   clusterName,
+				constants.LabelKeyNodePoolID: nodePoolID.String(),
+			},
+		},
+		Status: clusterv1.MachineStatus{
+			NodeRef: clusterv1.MachineNodeReference{Name: nodeName},
+		},
+	}
+	kubeNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{{
+				Type:    corev1.NodeConditionType(constants.NodeConditionTypeNeedsRecycle),
+				Status:  corev1.ConditionTrue,
+				Message: "NKE auto-mode recycling deprecated node",
+			}},
+		},
+	}
+
+	database := &testutil.MockDB{}
+	database.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID, Name: clusterName}, nil).Once()
+	database.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{
+		ID:            nodePoolID,
+		LifecycleMode: db.NodePoolLifecycleModeMachineDeployment,
+	}, nil).Once()
+
+	workflowClient := &recordingWorkflowStarter{}
+	reconciler := newTestReconcilerWithConfig(t, config.Config{
+		TemporalTaskQueue:                        "test-task-queue",
+		NodeSignalDisruptionAuthorizationEnabled: false,
+	}, clusterID, database, workflowClient, []runtime.Object{kubeNode}, machine)
+
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	require.NoError(t, err)
+	require.Empty(t, result)
+	database.AssertExpectations(t)
+	require.Empty(t, workflowClient.calls)
+
+	got := &clusterv1.Machine{}
+	err = reconciler.k8sClient.Get(context.Background(), types.NamespacedName{Namespace: constants.NamespaceNKESystem, Name: machine.Name}, got)
+	require.True(t, apierrors.IsNotFound(err))
+}
+
+func TestUnit_ReconcileUsesLegacyWorkflowForLegacyMachineNodePool(t *testing.T) {
+	clusterID := uuid.New()
+	nodePoolID := uuid.New()
+	nodeID := uuid.New()
+	nodeName := "worker-1"
+	clusterName := "cluster-1"
+	dbNode := db.Node{ID: nodeID, ClusterID: clusterID, Name: nodeName}
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-machine",
+			Namespace: constants.NamespaceNKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:   clusterName,
+				constants.LabelKeyNodePoolID: nodePoolID.String(),
+			},
+		},
+		Status: clusterv1.MachineStatus{
+			NodeRef: clusterv1.MachineNodeReference{Name: nodeName},
+		},
+	}
+	kubeNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Labels: map[string]string{
+				constants.LabelKeyNodeLabelTerminate: "replace-node",
+			},
+		},
+	}
+
+	database := &testutil.MockDB{}
+	database.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID, Name: clusterName}, nil).Once()
+	database.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{
+		ID:            nodePoolID,
+		LifecycleMode: db.NodePoolLifecycleModeLegacy,
+	}, nil).Once()
+	database.On("ListNodes", mock.Anything, mock.MatchedBy(func(filters db.NodeFilters) bool {
+		return filters.ClusterID != nil && *filters.ClusterID == clusterID &&
+			filters.Name != nil && *filters.Name == nodeName
+	})).Return([]db.Node{dbNode}, nil).Once()
+
+	workflowClient := &recordingWorkflowStarter{}
+	reconciler := newTestReconciler(t, clusterID, database, workflowClient, []runtime.Object{kubeNode}, machine)
+
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	require.NoError(t, err)
+	require.Empty(t, result)
+	database.AssertExpectations(t)
+	require.Len(t, workflowClient.calls, 1)
+	require.Equal(t, constants.TeardownNodeWorkflowPrefix+nodeID.String(), workflowClient.calls[0].options.ID)
+
+	got := &clusterv1.Machine{}
+	require.NoError(t, reconciler.k8sClient.Get(context.Background(), types.NamespacedName{Namespace: constants.NamespaceNKESystem, Name: machine.Name}, got))
+}
+
+func newTestReconciler(
+	t *testing.T,
+	clusterID uuid.UUID,
+	database *testutil.MockDB,
+	workflowClient *recordingWorkflowStarter,
+	kubeObjects []runtime.Object,
+	mgmtObjects ...runtime.Object,
+) *Reconciler {
+	return newTestReconcilerWithConfig(t, config.Config{
+		TemporalTaskQueue:                        "test-task-queue",
+		NodeRebootInitialTimeout:                 time.Minute,
+		NodeRebootTimeoutIncrement:               2 * time.Minute,
+		NodeRebootMaxTimeout:                     5 * time.Minute,
+		NodeRebootPollingInterval:                10 * time.Second,
+		NodeSignalDisruptionAuthorizationEnabled: true,
+	}, clusterID, database, workflowClient, kubeObjects, mgmtObjects...)
+}
+
+func newTestReconcilerWithConfig(
+	t *testing.T,
+	cfg config.Config,
+	clusterID uuid.UUID,
+	database *testutil.MockDB,
+	workflowClient *recordingWorkflowStarter,
+	kubeObjects []runtime.Object,
+	mgmtObjects ...runtime.Object,
+) *Reconciler {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	require.NoError(t, corev1.AddToScheme(scheme))
+	tenantScheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(tenantScheme))
+	mgmtScheme := runtime.NewScheme()
+	require.NoError(t, clusterv1.AddToScheme(mgmtScheme))
 	return &Reconciler{
-		clusterID: clusterID,
-		db:        dbwrapper.New(database, slog.New(slog.DiscardHandler)),
-		client:    fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(kubeObjects...).Build(),
-		remediator: newNodeRemediator(config.Config{
-			TemporalTaskQueue:          "test-task-queue",
-			NodeRebootInitialTimeout:   time.Minute,
-			NodeRebootTimeoutIncrement: 2 * time.Minute,
-			NodeRebootMaxTimeout:       5 * time.Minute,
-			NodeRebootPollingInterval:  10 * time.Second,
-		}, slog.New(slog.DiscardHandler), workflowClient),
+		clusterID:  clusterID,
+		cfg:        cfg,
+		db:         dbwrapper.New(database, slog.New(slog.DiscardHandler)),
+		client:     fake.NewClientBuilder().WithScheme(tenantScheme).WithRuntimeObjects(kubeObjects...).Build(),
+		k8sClient:  fake.NewClientBuilder().WithScheme(mgmtScheme).WithRuntimeObjects(mgmtObjects...).Build(),
+		logger:     slog.New(slog.DiscardHandler),
+		remediator: newNodeRemediator(cfg, slog.New(slog.DiscardHandler), workflowClient),
 	}
 }
 

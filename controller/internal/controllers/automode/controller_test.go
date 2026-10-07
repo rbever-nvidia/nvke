@@ -13,6 +13,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
@@ -74,11 +78,18 @@ func TestUnit_ReconcileSkipsNodePools(t *testing.T) {
 			mockDB := &testutil.MockDB{}
 			mockTx := &testutil.MockTx{}
 			mockDB.MockTx = mockTx
-			mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 			if name == "missing node pool" {
-				mockTx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(db.NodePool{}, db.ErrNotFound)
+				mockDB.On("GetNodePool", mock.Anything, nodePoolID).Return(db.NodePool{}, db.ErrNotFound)
 			} else {
-				mockTx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(params.nodePool, nil)
+				mockDB.On("GetNodePool", mock.Anything, nodePoolID).Return(params.nodePool, nil)
+				if params.nodePool.LifecycleMode != db.NodePoolLifecycleModeMachineDeployment {
+					mockTx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(params.nodePool, nil)
+				}
+			}
+			if params.nodePool.LifecycleMode == db.NodePoolLifecycleModeMachineDeployment {
+				mockDB.On("GetCluster", mock.Anything, params.nodePool.ClusterID).Return(db.Cluster{}, db.ErrNotFound)
+			} else if name != "missing node pool" {
+				mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 			}
 
 			controller := NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, nil)
@@ -118,6 +129,7 @@ func TestUnit_ReconcileMarksDeprecatedNodesWithinBudget(t *testing.T) {
 	mockDB := &testutil.MockDB{}
 	mockTx := &testutil.MockTx{}
 	mockDB.MockTx = mockTx
+	mockDB.On("GetNodePool", mock.Anything, nodePoolID).Return(nodePool, nil)
 	mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 	mockTx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(nodePool, nil)
 	mockTx.On("ListNodes", mock.Anything, availableNodeFilters(nodePoolID)).Return(availableNodes, nil)
@@ -170,6 +182,7 @@ func TestUnit_ReconcileSelfEnqueueIsIdempotent(t *testing.T) {
 	mockDB := &testutil.MockDB{}
 	mockTx := &testutil.MockTx{}
 	mockDB.MockTx = mockTx
+	mockDB.On("GetNodePool", mock.Anything, nodePoolID).Return(nodePool, nil).Twice()
 	mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil).Twice()
 	mockTx.On("GetNodePoolForUpdate", mock.Anything, nodePoolID).Return(nodePool, nil).Twice()
 	mockTx.On("ListNodes", mock.Anything, availableNodeFilters(nodePoolID)).Return([]db.Node{{ID: uuid.New(), NodePoolID: nodePoolID}}, nil).Twice()
@@ -194,6 +207,52 @@ func TestUnit_ReconcileSelfEnqueueIsIdempotent(t *testing.T) {
 
 	mockDB.AssertExpectations(t)
 	mockTx.AssertExpectations(t)
+}
+
+func TestUnit_ClassifyMachineDeploymentMachinesExcludesNeedsRecycle(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker-recycling"},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+				{Type: corev1.NodeConditionType(constants.NodeConditionTypeNeedsRecycle), Status: corev1.ConditionTrue},
+			}},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker-available"},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			}},
+		},
+	).Build()
+	machines := []clusterv1.Machine{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "machine-recycling"},
+			Status: clusterv1.MachineStatus{
+				NodeRef: clusterv1.MachineNodeReference{Name: "worker-recycling"},
+				Conditions: []metav1.Condition{
+					{Type: clusterv1.MachineNodeReadyCondition, Status: metav1.ConditionTrue},
+					{Type: clusterv1.MachineUpToDateCondition, Status: metav1.ConditionFalse},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "machine-available"},
+			Status: clusterv1.MachineStatus{
+				NodeRef: clusterv1.MachineNodeReference{Name: "worker-available"},
+				Conditions: []metav1.Condition{
+					{Type: clusterv1.MachineNodeReadyCondition, Status: metav1.ConditionTrue},
+				},
+			},
+		},
+	}
+
+	classification := classifyMachinesForAutoMode(context.Background(), tenantClient, machines)
+
+	require.Equal(t, 1, classification.availableCount)
+	require.Empty(t, classification.stale)
 }
 
 func TestUnit_NodePoolKeysForNodeSet(t *testing.T) {
@@ -231,6 +290,7 @@ func baseNodePool(id, currentNodeSetID uuid.UUID, opts ...func(*db.NodePool)) db
 		Name:             "workers",
 		DesiredCount:     1,
 		RecycleBudget:    1,
+		LifecycleMode:    db.NodePoolLifecycleModeLegacy,
 		CurrentNodeSetID: &currentNodeSetID,
 		Conditions:       db.NodePoolConditions{},
 	}

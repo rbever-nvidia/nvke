@@ -12,6 +12,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
@@ -38,6 +39,22 @@ func newNodeRemediator(cfg config.Config, logger *slog.Logger, controllerTempora
 		logger:                   logger,
 		controllerTemporalClient: controllerTemporalClient,
 	}
+}
+
+func (r *Reconciler) remediateLegacyWorker(ctx context.Context, kubeNode *corev1.Node) (reconcile.Result, error) {
+	nodes, err := r.db.ListNodes(ctx, db.NodeFilters{ClusterID: &r.clusterID, Name: &kubeNode.Name})
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("listing CWE node %s for cluster %s: %w", kubeNode.Name, r.clusterID, err)
+	}
+	if len(nodes) == 0 {
+		return reconcile.Result{}, nil
+	}
+	dbNode := nodes[0]
+
+	if err := r.remediator.startWorkflowsIfNecessary(ctx, dbNode, kubeNode); err != nil {
+		return reconcile.Result{}, fmt.Errorf("processing node remediation for node %s: %w", dbNode.ID, err)
+	}
+	return reconcile.Result{}, nil
 }
 
 func (r *nodeRemediator) startWorkflowsIfNecessary(ctx context.Context, node db.Node, kubeNode *corev1.Node) error {

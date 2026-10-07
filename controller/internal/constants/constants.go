@@ -3,6 +3,8 @@
 
 package constants
 
+import "time"
+
 import (
 	"github.com/google/uuid"
 )
@@ -107,12 +109,12 @@ const (
 	NodeAnnotationKeyMachineHealthIssue = "nke.nvidia.com/machine-health-issue"
 
 	// CAPI Machine annotations
-	MachineAnnotationKeyHostID                  = "nke.nvidia.com/host-id"
-	MachineAnnotationKeyRebootCompleteTimestamp = "nke.nvidia.com/reboot-complete-timestamp"
-	MachineAnnotationKeyReboot                  = "nke.nvidia.com/reboot"
-	MachineAnnotationKeyMachineHealthIssue      = "nke.nvidia.com/machine-health-issue"
-	MachineAnnotationKeySpireAgentSpiffeIDPath  = "nke.nvidia.com/spire-agent-spiffe-id-path"
-	MachineAnnotationKeyDisruptionAuthorized    = "nke.nvidia.com/disruption-authorized"
+	MachineAnnotationKeyHostID                      = "nke.nvidia.com/host-id"
+	MachineAnnotationKeyRebootCompleteTimestamp     = "nke.nvidia.com/reboot-complete-timestamp"
+	MachineAnnotationKeyReboot                      = "nke.nvidia.com/reboot"
+	MachineAnnotationKeyMachineHealthIssue          = "nke.nvidia.com/machine-health-issue"
+	MachineAnnotationKeySpireAgentSpiffeIDPath      = "nke.nvidia.com/spire-agent-spiffe-id-path"
+	MachineAnnotationKeyDisruptionAuthorized        = "nke.nvidia.com/disruption-authorized"
 	MachineAnnotationKeyDisruptionAuthorizationHook = "pre-drain.delete.hook.machine.cluster.x-k8s.io/nke-disruption-authorization"
 
 	LabelValueTerminateStatusInProgress = "InProgress"
@@ -127,8 +129,8 @@ const (
 	NodeConditionTypeNeedsRepair  = "nke.nvidia.com/NeedsRepair"
 
 	// NKE-owned CAPI Machine condition types for MachineDeployment workers.
-	MachineConditionTypeProvisioning           = "nke.nvidia.com/Provisioning"
-	MachineConditionReasonProvisioningComplete = "ProvisioningComplete"
+	MachineConditionTypeProvisioning            = "nke.nvidia.com/Provisioning"
+	MachineConditionReasonProvisioningComplete  = "ProvisioningComplete"
 	MachineConditionTypeNodeAgentReady          = "nke.nvidia.com/NodeAgentReady"
 	MachineConditionTypeKubernetesUnschedulable = "nke.nvidia.com/KubernetesUnschedulable"
 
@@ -153,12 +155,18 @@ type RebootStatus string
 
 const (
 	RebootStatusInProgress             RebootStatus = "InProgress"
+	RebootStatusCAPIRebootStarted      RebootStatus = "CAPIRebootStarted"
 	RebootStatusCompleted              RebootStatus = "Completed"
 	RebootStatusFailed                 RebootStatus = "Failed"
 	RebootStatusNotAllowed             RebootStatus = "NotAllowed"
 	RebootStatusCanceled               RebootStatus = "Canceled"
 	RebootStatusFailedInstanceNotFound RebootStatus = "FailedInstanceNotFound"
 )
+
+// FormatTimeForK8sLabel formats a timestamp for Kubernetes label values.
+func FormatTimeForK8sLabel(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15-04-05Z")
+}
 
 type NodeTaint struct {
 	Key    string

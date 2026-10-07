@@ -86,14 +86,14 @@ func RebootNode(ctx workflow.Context, input RebootNodeInput) (wfErr error) {
 
 	// Set reboot-started label
 	// The reboot-started is an ephemeral label, and will be deleted after the node has rebooted.
-	rebootStartedLabel := fmt.Sprintf("%s=%s", constants.LabelKeyNodeLabelRebootStarted, formatTimeForK8sLabel(workflow.Now(ctx).UTC()))
+	rebootStartedLabel := fmt.Sprintf("%s=%s", constants.LabelKeyNodeLabelRebootStarted, constants.FormatTimeForK8sLabel(workflow.Now(ctx).UTC()))
 
 	// Also set reboot-status labels
 	// They are used to provide external visibility to SREs and engineers that the reboot is in progress,
 	// and making progress (or at least retrying) on the reboot, using kube native labels.
 	// Instead of needing access to our logging and monitoring.
 	rebootStatusLabel := fmt.Sprintf("%s=%s", constants.LabelKeyNodeLabelRebootStatus, constants.RebootStatusInProgress)
-	rebootStatusTime := fmt.Sprintf("%s=%s", constants.LabelKeyNodeLabelRebootStatusTimestamp, formatTimeForK8sLabel(time.Now().UTC()))
+	rebootStatusTime := fmt.Sprintf("%s=%s", constants.LabelKeyNodeLabelRebootStatusTimestamp, constants.FormatTimeForK8sLabel(time.Now().UTC()))
 
 	if err := applyRebootLabelsAndSetNodeCondition(ctx, input, rebootStartedLabel, rebootStatusLabel, rebootStatusTime); err != nil {
 		return fmt.Errorf("failed to apply reboot-started label to node: %w", err)
@@ -162,7 +162,7 @@ type rebootSuccessDetails struct {
 func completeReboot(ctx workflow.Context, input RebootNodeInput, status constants.RebootStatus, success *rebootSuccessDetails) error {
 	logger := workflow.GetLogger(ctx)
 
-	ts := formatTimeForK8sLabel(time.Now().UTC())
+	ts := constants.FormatTimeForK8sLabel(time.Now().UTC())
 
 	var conditionMsg string
 	if success != nil {
@@ -209,12 +209,6 @@ func completeReboot(ctx workflow.Context, input RebootNodeInput, status constant
 	}
 
 	return nil
-}
-
-// ISO datetime strings cannot be used as-is for labels, as they contain colons.
-// A label format has already been described in mk8s Node Management Guidelines.
-func formatTimeForK8sLabel(t time.Time) string {
-	return t.UTC().Format("2006-01-02T15-04-05Z")
 }
 
 func applyRebootLabelsAndSetNodeCondition(ctx workflow.Context, input RebootNodeInput, labels ...string) error {

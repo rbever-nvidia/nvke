@@ -106,6 +106,7 @@ func (c *Controller) reconcileLegacyAutoMode(ctx context.Context, tx db.Tx, node
 			return fmt.Errorf("failed to update node conditions: %s: %w", lockedNode.ID, err)
 		}
 
+		// FIXME: POC: This should likely just use nodeconditions.ApplyNeedsRecycle directly also.
 		workflowID := constants.ApplyK8sNodeConditionWorkflowPrefix + lockedNode.ID.String()
 		_, err = tx.CreateWorkflowOutboxEntry(ctx, workflows.ApplyK8sNodeConditionWorkflowName, workflowID, workflows.ApplyK8sNodeConditionInput{
 			NodeID: lockedNode.ID,

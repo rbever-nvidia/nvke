@@ -462,6 +462,7 @@ func main() {
 			tenantnoderemediation.NewRegistrar(
 				cfg,
 				dbInstance,
+				k8sControllerManager.GetClient(),
 				temporalClient,
 				logger.With("logger", "tenant-node-remediation-controller"),
 			),

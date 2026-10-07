@@ -19,6 +19,7 @@ import (
 
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
+	"github.com/dsx-ai-factory/nke/controller/internal/controllers/tenant/nodeconditions"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 	"github.com/dsx-ai-factory/nke/controller/internal/kube"
 )
@@ -169,6 +170,9 @@ func (c *MachineDeletionController) disruptionAuthorized(ctx context.Context, ma
 			return true, "tenant Node is absent", nil
 		}
 		return false, "", fmt.Errorf("getting tenant Node %s for Machine %s/%s: %w", machine.Status.NodeRef.Name, machine.Namespace, machine.Name, err)
+	}
+	if err := nodeconditions.ApplyNeedsRecycle(ctx, tenantClient, machine.Status.NodeRef.Name, "NKE Machine deletion is waiting for disruption authorization"); err != nil {
+		return false, "", fmt.Errorf("publishing recycle signal for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
 	}
 
 	// Check if the tenant Node has the termination label.
