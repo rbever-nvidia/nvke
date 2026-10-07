@@ -63,7 +63,6 @@ CNI_VERSION="${CNI_VERSION:-}"
 
 OS_PROFILE="${OS_PROFILE:-nke-260611-24.04-amd64-fde}"
 CP_CONFIG_PROFILE="${CP_CONFIG_PROFILE:-nvcf-cp-v3}"
-WORKER_CONFIG_PROFILE="${WORKER_CONFIG_PROFILE:-nvcf-monitoring-v3}"
 SYSTEM_RESERVED_MEMORY="${SYSTEM_RESERVED_MEMORY:-1Gi}"
 ETCD_ENCRYPTED="${ETCD_ENCRYPTED:-false}"
 
@@ -111,8 +110,7 @@ BODY=$(cat <<EOF
       "nico": {
         "vpcPrefixIDs": ["${VPC_PREFIX_ID}"],
         "instanceTypeID": "${INSTANCE_TYPE_ID}",
-        "osProfile": "${OS_PROFILE}",
-        "configProfile": "${WORKER_CONFIG_PROFILE}"
+        "osProfile": "${OS_PROFILE}"
       },
       "systemReservedMemory": "${SYSTEM_RESERVED_MEMORY}",
       "controlPlane": false,
