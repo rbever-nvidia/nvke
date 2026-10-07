@@ -416,10 +416,31 @@ func main() {
 		envOr("NKE_CNI_IMAGE_REGISTRY", ""),
 		"OCI registry prefix for CNI component images (e.g. registry.example.com/nke). When set, passed to the CNI helm chart as --set global.registry=<value>. Also set via NKE_CNI_IMAGE_REGISTRY",
 	)
+	reconcileOpenVSwitchAndExit := flag.Bool("reconcile-openvswitch-and-exit", false, "Run local Open vSwitch reconciliation and exit")
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Printf("NKE Agent Version: %s\n", VERSION)
+		os.Exit(0)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
+	if *reconcileOpenVSwitchAndExit {
+		agentServer := server.NewNodeAgentServer(false, *bundleServerURL, *indexFileURL, *cniImageRegistry)
+		result, err := agentServer.ReconcileOpenVSwitch(context.Background())
+		if err != nil {
+			slog.Error("Open vSwitch reconciliation failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info(
+			"Open vSwitch reconciliation completed",
+			"outcome", result.GetOutcome().String(),
+			"bridge", result.GetBridgeName(),
+			"uplink", result.GetUplinkInterface(),
+			"networkBackend", result.GetNetworkBackend().String(),
+		)
 		os.Exit(0)
 	}
 
@@ -434,8 +455,6 @@ func main() {
 	// Create audit logger, script execution logger, and default logger
 	auditLogger := slog.New(slog.NewJSONHandler(auditFile, nil))
 	scriptExecutionLogger := slog.New(slog.NewJSONHandler(scriptExecLogFile, nil))
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
 
 	// Build config from flags and build-time vars
 	cfg := AgentConfig{

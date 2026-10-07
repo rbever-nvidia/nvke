@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -140,29 +141,7 @@ func (s *NodeAgentServer) runOpenVSwitchReconciliation(
 	progress nodeAgentOperationProgress,
 ) error {
 	progress.SetStep("reconciling")
-	s.openVSwitchMu.Lock()
-	defer s.openVSwitchMu.Unlock()
-
-	result, plan, err := s.reconcileOpenVSwitchLocked(ctx)
-	for errors.Is(err, errOpenVSwitchDefaultRouteMissing) && plan == nil {
-		progress.SetStep("waiting_for_default_route")
-		if err = sleepOrDone(ctx, s.openVSwitchConvergenceDelayOrDefault()); err != nil {
-			return err
-		}
-		result, plan, err = s.reconcileOpenVSwitchLocked(ctx)
-	}
-	if errors.Is(err, errOpenVSwitchNotConverged) && plan != nil {
-		progress.SetStep("waiting_for_network")
-		for errors.Is(err, errOpenVSwitchNotConverged) {
-			if err = sleepOrDone(ctx, s.openVSwitchConvergenceDelayOrDefault()); err != nil {
-				return err
-			}
-			err = s.verifyOpenVSwitchPlan(*plan)
-		}
-		if err == nil {
-			result = configuredOpenVSwitchResult(*plan)
-		}
-	}
+	result, err := s.ReconcileOpenVSwitch(ctx)
 	if err != nil {
 		return err
 	}
@@ -178,6 +157,41 @@ func (s *NodeAgentServer) runOpenVSwitchReconciliation(
 	}
 	progress.SetResult(string(encodedResult))
 	return nil
+}
+
+// ReconcileOpenVSwitch runs the same local host-network reconciliation used by
+// the asynchronous gRPC operation. It is intended for local bootstrap callers
+// such as a systemd oneshot unit, before the node agent gRPC server is useful.
+func (s *NodeAgentServer) ReconcileOpenVSwitch(ctx context.Context) (*pb.OpenVSwitchReconciliationResult, error) {
+	if s.Runner == nil {
+		return nil, status.Error(codes.FailedPrecondition, "command runner is not configured")
+	}
+
+	s.openVSwitchMu.Lock()
+	defer s.openVSwitchMu.Unlock()
+
+	result, plan, err := s.reconcileOpenVSwitchLocked(ctx)
+	for errors.Is(err, errOpenVSwitchDefaultRouteMissing) && plan == nil {
+		if err = sleepOrDone(ctx, s.openVSwitchConvergenceDelayOrDefault()); err != nil {
+			return nil, err
+		}
+		result, plan, err = s.reconcileOpenVSwitchLocked(ctx)
+	}
+	if errors.Is(err, errOpenVSwitchNotConverged) && plan != nil {
+		for errors.Is(err, errOpenVSwitchNotConverged) {
+			if err = sleepOrDone(ctx, s.openVSwitchConvergenceDelayOrDefault()); err != nil {
+				return nil, err
+			}
+			err = s.verifyOpenVSwitchPlan(*plan)
+		}
+		if err == nil {
+			result = configuredOpenVSwitchResult(*plan)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *NodeAgentServer) reconcileOpenVSwitchLocked(
@@ -197,18 +211,36 @@ func (s *NodeAgentServer) reconcileOpenVSwitchLocked(
 	if err != nil {
 		return nil, nil, status.Errorf(codes.Internal, "list Open vSwitch bridges: %v", err)
 	}
-	if strings.HasPrefix(defaultRoute.Device, openVSwitchBridgePrefix) && slices.Contains(bridges, defaultRoute.Device) {
-		return &pb.OpenVSwitchReconciliationResult{
-			Outcome:    pb.OpenVSwitchReconciliationResult_OUTCOME_UNCHANGED,
-			BridgeName: defaultRoute.Device,
-		}, nil, nil
+	bridgeExists := strings.HasPrefix(defaultRoute.Device, openVSwitchBridgePrefix) && slices.Contains(bridges, defaultRoute.Device)
+	uplinkName := defaultRoute.Device
+	bridgeName := ""
+	if bridgeExists {
+		bridgeName = defaultRoute.Device
+		uplinkName, err = s.openVSwitchPhysicalUplink(bridgeName)
+		if err != nil {
+			return nil, nil, status.Errorf(codes.FailedPrecondition, "discover physical uplink for bridge %s: %v", bridgeName, err)
+		}
+		backend, complete, err := s.openVSwitchPersistentBridge(bridgeName, uplinkName)
+		if err != nil {
+			return nil, nil, status.Errorf(codes.FailedPrecondition, "inspect persistent configuration for bridge %s: %v", bridgeName, err)
+		}
+		if complete {
+			return &pb.OpenVSwitchReconciliationResult{
+				Outcome:         pb.OpenVSwitchReconciliationResult_OUTCOME_UNCHANGED,
+				BridgeName:      bridgeName,
+				UplinkInterface: uplinkName,
+				NetworkBackend:  backend,
+			}, nil, nil
+		}
 	}
 
-	link, err := s.readOpenVSwitchLink(defaultRoute.Device)
+	link, err := s.readOpenVSwitchLink(uplinkName)
 	if err != nil {
-		return nil, nil, status.Errorf(codes.FailedPrecondition, "discover default-route interface %s: %v", defaultRoute.Device, err)
+		return nil, nil, status.Errorf(codes.FailedPrecondition, "discover uplink interface %s: %v", uplinkName, err)
 	}
-	bridgeName := openVSwitchBridgePrefix + link.Name
+	if bridgeName == "" {
+		bridgeName = openVSwitchBridgePrefix + link.Name
+	}
 	if len(bridgeName) > 15 {
 		return nil, nil, status.Errorf(codes.FailedPrecondition, "derived bridge name %q exceeds the Linux interface-name limit", bridgeName)
 	}
@@ -216,8 +248,10 @@ func (s *NodeAgentServer) reconcileOpenVSwitchLocked(
 	if err != nil {
 		return nil, nil, status.Errorf(codes.FailedPrecondition, "build Open vSwitch network plan: %v", err)
 	}
-	if err := s.regenerateOpenVSwitchSystemID(); err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "regenerate Open vSwitch system ID: %v", err)
+	if !bridgeExists {
+		if err := s.regenerateOpenVSwitchSystemID(); err != nil {
+			return nil, nil, status.Errorf(codes.Internal, "regenerate Open vSwitch system ID: %v", err)
+		}
 	}
 	if err := s.applyOpenVSwitchPlan(ctx, plan); err != nil {
 		return nil, &plan, err
@@ -329,6 +363,55 @@ func (s *NodeAgentServer) listOpenVSwitchBridges() ([]string, error) {
 		return nil, err
 	}
 	return strings.Fields(string(output)), nil
+}
+
+func (s *NodeAgentServer) openVSwitchPhysicalUplink(bridgeName string) (string, error) {
+	output, err := s.runOpenVSwitchCommand("ovs-vsctl", "list-ports", bridgeName)
+	if err != nil {
+		return "", err
+	}
+	for _, port := range strings.Fields(string(output)) {
+		if _, err := os.Stat(s.rootedPath("/sys/class/net/" + port + "/device")); err == nil {
+			return port, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect port %s: %w", port, err)
+		}
+	}
+	return "", fmt.Errorf("no physical port found")
+}
+
+func (s *NodeAgentServer) openVSwitchPersistentBridge(
+	bridgeName, uplinkName string,
+) (pb.OpenVSwitchReconciliationResult_NetworkBackend, bool, error) {
+	paths, err := filepath.Glob(filepath.Join(s.rootedPath(openVSwitchNetplanDir), "*.yaml"))
+	if err != nil {
+		return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_UNSPECIFIED, false, fmt.Errorf("list netplan files: %w", err)
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_UNSPECIFIED, false, fmt.Errorf("read %s: %w", path, err)
+		}
+		document, err := parseOpenVSwitchNetplanDocument(data)
+		if err != nil {
+			return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_UNSPECIFIED, false, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if openVSwitchBridgeUsesInterface(document.bridges[bridgeName], uplinkName) {
+			return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_NETPLAN, true, nil
+		}
+	}
+
+	bridgePath := filepath.Join(s.rootedPath(openVSwitchInterfacesDir), "ifcfg-"+bridgeName)
+	data, err := os.ReadFile(bridgePath)
+	if err == nil {
+		config := string(data)
+		if strings.Contains(config, "ovs_type OVSBridge") && strings.Contains(config, "ovs_ports "+uplinkName) {
+			return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_IFUPDOWN, true, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_UNSPECIFIED, false, fmt.Errorf("read %s: %w", bridgePath, err)
+	}
+	return pb.OpenVSwitchReconciliationResult_NETWORK_BACKEND_UNSPECIFIED, false, nil
 }
 
 func (s *NodeAgentServer) regenerateOpenVSwitchSystemID() error {

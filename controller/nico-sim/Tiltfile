@@ -100,6 +100,7 @@ def register(ctx):
     _deploy = os.path.join(provider_dir, "deploy")
     _dev = os.path.join(provider_dir, ".dev")
     _log_dir = os.path.join(_dev, "logs")
+    _files_dir = os.getenv("NICO_SIM_FILES_DIR", os.path.join(_dev, "files"))
     _host_os = str(local("uname -s", quiet=True, echo_off=True)).strip()
     _backends = _nico_sim_backends(ctx.cfg)
     _container_backend_enabled = "container" in _backends
@@ -168,7 +169,7 @@ def register(ctx):
     # This restores the v12 POC artifact delivery without restoring its
     # MachinePreJoinController, bootstrap gate, or node-agent binary streaming.
     _spiffe_exec_auth_image = "ghcr.io/spiffe/k8s-spiffe-workload-jwt-exec-auth:0.3.0@sha256:6402624276b66ef7a733e126488397c9cf33c6706ee1f52a9c7ffad2a540aa7c"
-    _spiffe_exec_auth_path = os.path.join(_dev, "files", "spiffe", "k8s-spiffe-workload-jwt-exec-auth")
+    _spiffe_exec_auth_path = os.path.join(_files_dir, "spiffe", "k8s-spiffe-workload-jwt-exec-auth")
     local_resource(
         "nico-sim-spiffe-exec-auth",
         cmd=["bash", "-c", """
@@ -305,7 +306,7 @@ def register(ctx):
 
     nico_sim_env = {
         "NICO_SIM_LISTEN_ADDR": ":18080",
-        "NICO_SIM_FILES_DIR": os.getenv("NICO_SIM_FILES_DIR", os.path.join(_dev, "files")),
+        "NICO_SIM_FILES_DIR": _files_dir,
         "NICO_VMS_BRIDGE_CIDR": _bridge_cidr,
         "NICO_SIM_DB_PATH": os.path.join(_dev, "nico-sim.db"),
         "NICO_VMS_BASE_IMAGE": os.path.join(provider_dir, "images", "ubuntu-cloud.qcow2"),

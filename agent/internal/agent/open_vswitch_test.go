@@ -61,14 +61,28 @@ func TestStartOpenVSwitchReconciliationRejectsNilRequest(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
-func TestOpenVSwitchReconciliationReturnsUnchangedForLiveBridge(t *testing.T) {
+func TestOpenVSwitchReconciliationReturnsUnchangedForPersistedBridge(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sys/class/net/eth0/device"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "etc/netplan"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "etc/netplan/50-ovs.yaml"), []byte(`network:
+  version: 2
+  ethernets:
+    eth0: {}
+  bridges:
+    breth0:
+      interfaces: [eth0]
+      dhcp4: true
+      openvswitch: {}
+`), 0o600))
 	runner := newOpenVSwitchTestRunner(t, map[string][]openVSwitchCommandResult{
 		"dpkg-query --show --showformat=${db:Status-Abbrev} openvswitch-switch": {{output: []byte("ii ")}},
 		"systemctl enable --now openvswitch-switch":                             {{}},
 		"ip -j route show default":                                              {{output: []byte(`[{"dst":"default","dev":"breth0"}]`)}},
 		"ovs-vsctl list-br":                                                     {{output: []byte("breth0\n")}},
+		"ovs-vsctl list-ports breth0":                                           {{output: []byte("eth0\n")}},
 	})
-	server := &NodeAgentServer{Runner: runner}
+	server := &NodeAgentServer{Runner: runner, RootPath: root}
 
 	result, _, err := server.reconcileOpenVSwitchLocked(context.Background())
 
@@ -76,6 +90,86 @@ func TestOpenVSwitchReconciliationReturnsUnchangedForLiveBridge(t *testing.T) {
 	assert.Equal(t, pb.OpenVSwitchReconciliationResult_OUTCOME_UNCHANGED, result.GetOutcome())
 	assert.Equal(t, "breth0", result.GetBridgeName())
 	assert.NotContains(t, runner.calls, "systemctl restart ovs-vswitchd")
+}
+
+func TestOpenVSwitchReconciliationRepairsUnpersistedLiveBridge(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sys/class/net/eth0/device"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "etc/netplan"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "etc/netplan/00-dhcp-all.yaml"), []byte(`network:
+  version: 2
+  ethernets:
+    all-en:
+      match:
+        name: "en*"
+      dhcp4: true
+`), 0o600))
+
+	runner := newOpenVSwitchTestRunner(t, map[string][]openVSwitchCommandResult{
+		"dpkg-query --show --showformat=${db:Status-Abbrev} openvswitch-switch": {{output: []byte("ii ")}},
+		"systemctl enable --now openvswitch-switch":                             {{}},
+		"ip -j route show default": {
+			{output: []byte(`[{"dst":"default","gateway":"10.0.0.1","dev":"breth0"}]`)},
+			{output: []byte(`[{"dst":"default","gateway":"10.0.0.1","dev":"breth0"}]`)},
+		},
+		"ovs-vsctl list-br": {
+			{output: []byte("breth0\n")},
+			{output: []byte("breth0\n")},
+		},
+		"ovs-vsctl list-ports breth0": {{output: []byte("eth0\n")}},
+		"ip -j link show dev eth0":    {{output: []byte(`[{"ifname":"eth0","address":"00:11:22:33:44:55","mtu":1500}]`)}},
+		"netplan generate":            {{}},
+		"netplan apply":               {{}},
+	})
+	server := &NodeAgentServer{Runner: runner, RootPath: root, openVSwitchSettleDelay: 1}
+
+	result, _, err := server.reconcileOpenVSwitchLocked(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, pb.OpenVSwitchReconciliationResult_OUTCOME_CONFIGURED, result.GetOutcome())
+	assert.Equal(t, "breth0", result.GetBridgeName())
+	assert.Equal(t, "eth0", result.GetUplinkInterface())
+	assert.NotContains(t, runner.calls, "systemctl restart ovs-vswitchd")
+}
+
+func TestReconcileOpenVSwitchRunsLocalReconciliation(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sys/class/net/eth0/device"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "etc/netplan"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "etc/netplan/50-ovs.yaml"), []byte(`network:
+  version: 2
+  ethernets:
+    eth0: {}
+  bridges:
+    breth0:
+      interfaces: [eth0]
+      dhcp4: true
+      openvswitch: {}
+`), 0o600))
+	runner := newOpenVSwitchTestRunner(t, map[string][]openVSwitchCommandResult{
+		"dpkg-query --show --showformat=${db:Status-Abbrev} openvswitch-switch": {{output: []byte("ii ")}},
+		"systemctl enable --now openvswitch-switch":                             {{}},
+		"ip -j route show default":                                              {{output: []byte(`[{"dst":"default","dev":"breth0"}]`)}},
+		"ovs-vsctl list-br":                                                     {{output: []byte("breth0\n")}},
+		"ovs-vsctl list-ports breth0":                                           {{output: []byte("eth0\n")}},
+	})
+	server := &NodeAgentServer{Runner: runner, RootPath: root}
+
+	result, err := server.ReconcileOpenVSwitch(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, pb.OpenVSwitchReconciliationResult_OUTCOME_UNCHANGED, result.GetOutcome())
+	assert.Equal(t, "breth0", result.GetBridgeName())
+	assert.Equal(t, "eth0", result.GetUplinkInterface())
+}
+
+func TestReconcileOpenVSwitchRejectsMissingCommandRunner(t *testing.T) {
+	server := &NodeAgentServer{}
+
+	_, err := server.ReconcileOpenVSwitch(context.Background())
+
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
 
 func TestOpenVSwitchReconciliationTransformsNetplanAndVerifiesBridge(t *testing.T) {
@@ -306,17 +400,32 @@ func TestOpenVSwitchReconciliationDoesNotHideOperationalErrors(t *testing.T) {
 }
 
 func TestStartOpenVSwitchReconciliationPersistsBeforeRunning(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sys/class/net/eth0/device"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "etc/netplan"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "etc/netplan/50-ovs.yaml"), []byte(`network:
+  version: 2
+  ethernets:
+    eth0: {}
+  bridges:
+    breth0:
+      interfaces: [eth0]
+      dhcp4: true
+      openvswitch: {}
+`), 0o600))
 	runner := newOpenVSwitchTestRunner(t, map[string][]openVSwitchCommandResult{
 		"dpkg-query --show --showformat=${db:Status-Abbrev} openvswitch-switch": {{output: []byte("ii ")}},
 		"systemctl enable --now openvswitch-switch":                             {{}},
 		"ip -j route show default":                                              {{output: []byte(`[{"dst":"default","dev":"breth0"}]`)}},
 		"ovs-vsctl list-br":                                                     {{output: []byte("breth0\n")}},
+		"ovs-vsctl list-ports breth0":                                           {{output: []byte("eth0\n")}},
 	})
 	persister := &recordingPersister{}
 	server := &NodeAgentServer{
 		Runner:     runner,
 		Persister:  persister,
 		NodeStatus: &NodeStatus{},
+		RootPath:   root,
 	}
 
 	response, err := server.StartOpenVSwitchReconciliation(

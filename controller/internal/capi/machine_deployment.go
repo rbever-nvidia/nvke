@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -30,8 +29,9 @@ import (
 )
 
 const (
-	workerCRISocket    = "unix:///var/run/containerd/containerd.sock"
-	templateHashLength = 16
+	workerCRISocket                 = "unix:///var/run/containerd/containerd.sock"
+	workerOpenVSwitchPreKubeadmUnit = "systemctl start nke-agent-openvswitch.service"
+	templateHashLength              = 16
 )
 
 type workerBootstrap struct {
@@ -105,7 +105,7 @@ func ApplyMachineDeployment(
 	if err != nil {
 		return nil, fmt.Errorf("rendering worker bootstrap: %w", err)
 	}
-	bootstrap, err := translateWorkerProfile(renderedProfile)
+	bootstrap, err := translateWorkerProfile(renderedProfile, cluster.CniPlugin)
 	if err != nil {
 		return nil, fmt.Errorf("translating worker bootstrap: %w", err)
 	}
@@ -236,18 +236,12 @@ func buildWorkerKubeadmConfigTemplate(
 		Permissions: fmt.Sprintf("%04o", patch.Mode),
 		Content:     string(patch.Content),
 	})
-	taints := []corev1.Taint{{
-		Key:    constants.TaintKeyNodeProvisioning,
-		Value:  "true",
-		Effect: corev1.TaintEffectNoSchedule,
-	}}
 	spec := bootstrapv1.KubeadmConfigSpec{
 		Files:              files,
 		PreKubeadmCommands: bootstrap.PreKubeadmCommands,
 		JoinConfiguration: bootstrapv1.JoinConfiguration{
 			NodeRegistration: bootstrapv1.NodeRegistrationOptions{
 				CRISocket: workerCRISocket,
-				Taints:    &taints,
 			},
 			Discovery: bootstrapv1.Discovery{
 				File: bootstrapv1.FileDiscovery{
@@ -392,6 +386,14 @@ func nodePoolLabels(clusterName, nodePoolID string) map[string]string {
 	}
 }
 
+func workerPreKubeadmCommands(cniPlugin db.CniPlugin, profileCommands []string) []string {
+	commands := append([]string(nil), profileCommands...)
+	if cniPlugin != db.CNIOvnKubernetes {
+		return commands
+	}
+	return append(commands, workerOpenVSwitchPreKubeadmUnit)
+}
+
 type workerProfileCloudConfig struct {
 	WriteFiles    []workerProfileCloudInitFile `yaml:"write_files"`
 	RunCmd        []workerProfileRunCmd        `yaml:"runcmd"`
@@ -429,7 +431,7 @@ func (c *workerProfileRunCmd) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func translateWorkerProfile(userData string) (workerBootstrap, error) {
+func translateWorkerProfile(userData string, cniPlugin db.CniPlugin) (workerBootstrap, error) {
 	var cfg workerProfileCloudConfig
 	if err := yaml.Unmarshal([]byte(userData), &cfg); err != nil {
 		return workerBootstrap{}, fmt.Errorf("parsing rendered cloud-config: %w", err)
@@ -457,6 +459,7 @@ func translateWorkerProfile(userData string) (workerBootstrap, error) {
 	for _, command := range cfg.RunCmd {
 		commands = append(commands, command.command)
 	}
+	commands = workerPreKubeadmCommands(cniPlugin, commands)
 	return workerBootstrap{Files: files, PreKubeadmCommands: commands}, nil
 }
 

@@ -571,43 +571,43 @@ Use typed subdirectories under the file root:
 var/files/
   images/
     custom-image.qcow2
-  agent/
-    nke-agent
+  node-agent/
+    nke-agent.deb
 ```
 
 Example URLs:
 
 ```text
 http://localhost:18080/files/images/custom-image.qcow2
-http://localhost:18080/files/agent/nke-agent
+http://localhost:18080/files/node-agent/nke-agent.deb
 ```
 
 The nico-vms dev OS profile uses `carbide-pxe.forge` inside the VM, so the
 same agent URL becomes:
 
 ```text
-http://carbide-pxe.forge:18080/files/agent/nke-agent
+http://carbide-pxe.forge:18080/files/node-agent/nke-agent.deb
 ```
 
-To try a local `nke-agent` build without rebuilding the full node image, build
-the agent and copy it into the file root. From the sibling `agent` repo:
+To try a local `nke-agent` package without rebuilding the full node image, build
+the package and copy it into the file root. From the sibling `agent` repo:
 
 ```bash
 cd agent
-make build-amd64
+make deb-amd64
 
-mkdir -p ../cloud-workflow-engine/nico-sim/var/files/agent
-cp bin/linux_amd64/nke-agent ../cloud-workflow-engine/nico-sim/var/files/agent/nke-agent
+mkdir -p ../cloud-workflow-engine/nico-sim/var/files/node-agent
+cp bin/nke-agent_*_amd64.deb ../cloud-workflow-engine/nico-sim/var/files/node-agent/nke-agent.deb
 ```
 
 The cloud-init pickup command used by `nke-nico-vms-24.04-amd64-fde` is:
 
 ```bash
-sh -c 'u=http://carbide-pxe.forge:18080/files/agent/nke-agent; if curl -fsSL "$u" -o /tmp/nke-agent; then install -m 0755 /tmp/nke-agent /usr/local/bin/nke-agent && echo "downloaded local nke-agent" && /usr/local/bin/nke-agent -version; else echo "local nke-agent not available at $u; using image agent"; fi'
+sh -c 'u=http://carbide-pxe.forge:18080/files/node-agent/nke-agent.deb; if curl -fsSL "$u" -o /tmp/nke-agent.deb; then NKE_AGENT_SKIP_START=1 dpkg -i /tmp/nke-agent.deb && echo "installed local nke-agent package" && /usr/local/bin/nke-agent -version; else echo "local nke-agent package not available at $u; using image agent"; fi'
 ```
 
-Remove or omit `files/agent/nke-agent` to fall back to the
-image-provided agent.
+Remove or omit `files/node-agent/nke-agent.deb` to fall back to the
+image-provided package.
 
 
 ## Testing

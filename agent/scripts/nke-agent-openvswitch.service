@@ -1,0 +1,12 @@
+[Unit]
+Description=NKE Agent Open vSwitch Reconciliation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/nke-agent
+ExecStart=/usr/local/bin/nke-agent --reconcile-openvswitch-and-exit $AGENT_ARGS
+
+StandardOutput=journal
+StandardError=journal

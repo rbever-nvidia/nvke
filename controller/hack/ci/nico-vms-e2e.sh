@@ -390,9 +390,9 @@ esac
 
 # ── The agent the tenant nodes run ──────────────────────────────────────────
 # The OS profile's userData apt-installs nke-agent from the bundle server, then
-# replaces it with http://carbide-pxe.forge:18080/files/node-agent/nke-agent
-# when that URL answers -- and silently keeps the packaged one otherwise. Build
-# it from this checkout and stage it at the path the template names. The file
+# installs http://carbide-pxe.forge:18080/files/node-agent/nke-agent.deb when
+# that URL answers -- and silently keeps the packaged one otherwise. Build it
+# from this checkout and stage it at the path the template names. The file
 # root is set explicitly: the default sits beside the database in .dev/, which
 # this script wipes.
 export NICO_SIM_FILES_DIR="${NICO_SIM_DIR}/var/files"

@@ -36,6 +36,10 @@ contents:
     dst: /etc/systemd/system/nke-agent-updater@.service
     expand: true
     file_info: { mode: 0644 }
+  - src: "${AGENT_DIR}/scripts/nke-agent-openvswitch.service"
+    dst: /etc/systemd/system/nke-agent-openvswitch.service
+    expand: true
+    file_info: { mode: 0644 }
 
 deb:
   compression: gzip
