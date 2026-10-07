@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 )
@@ -64,4 +65,20 @@ func TestBuildWorkerKubeadmConfigTemplate(t *testing.T) {
 	spec := template.Spec.Template.Spec
 	assert.Equal(t, []string{"echo profile", workerOpenVSwitchPreKubeadmUnit}, spec.PreKubeadmCommands)
 	assert.Nil(t, spec.JoinConfiguration.NodeRegistration.Taints)
+}
+
+func TestBuildWorkerMachineDeploymentDeletionOrder(t *testing.T) {
+	t.Parallel()
+
+	machineDeployment, err := buildWorkerMachineDeployment(
+		db.Cluster{Name: "cluster-1"},
+		db.NodePool{Name: "workers", DesiredCount: 3},
+		"cluster-1-workers",
+		"cluster-1-workers-infra",
+		"cluster-1-workers-bootstrap",
+		"v1.34.2",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, clusterv1.OldestMachineSetDeletionOrder, machineDeployment.Spec.Deletion.Order)
 }

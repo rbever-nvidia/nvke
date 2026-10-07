@@ -297,14 +297,17 @@ func buildWorkerMachineDeployment(
 			Kind:       "MachineDeployment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: constants.NamespaceNKESystem,
-			Labels:    labels,
+			Name:        name,
+			Namespace:   constants.NamespaceNKESystem,
+			Labels:      labels,
 			Annotations: annotations,
 		},
 		Spec: clusterv1.MachineDeploymentSpec{
 			ClusterName: cluster.Name,
 			Replicas:    &replicas,
+			Deletion: clusterv1.MachineDeploymentDeletionSpec{
+				Order: clusterv1.OldestMachineSetDeletionOrder,
+			},
 			Rollout: clusterv1.MachineDeploymentRolloutSpec{
 				Strategy: clusterv1.MachineDeploymentRolloutStrategy{
 					Type: clusterv1.OnDeleteMachineDeploymentStrategyType,
