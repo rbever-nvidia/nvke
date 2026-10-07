@@ -503,6 +503,7 @@ func TestNodePoolService_CreateMachineDeploymentNodePool(t *testing.T) {
 	nodePoolID := uuid.New()
 	cluster := db.Cluster{
 		ID:           clusterID,
+		Name:         "nico-vms",
 		ProviderType: db.ProviderTypeNico,
 		PodCIDR:      "192.168.0.0/16",
 		ServiceCIDR:  "10.96.0.0/12",
@@ -562,6 +563,7 @@ func TestNodePoolService_RejectsConfigProfileForMachineDeployment(t *testing.T) 
 	mockDB := &mockDB{}
 	mockDB.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{
 		ID:           clusterID,
+		Name:         "nico-vms",
 		ProviderType: db.ProviderTypeNico,
 	}, nil)
 

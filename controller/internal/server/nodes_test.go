@@ -283,7 +283,7 @@ func TestNodeService_ListNodes(t *testing.T) {
 			mockDB := &mockDB{}
 			mockDB.On("ListNodes", mock.Anything, tt.filters).Return(tt.dbNodes, tt.dbError)
 
-			service := server.NewNodeService(&slog.Logger{}, mockDB, false)
+			service := server.NewNodeService(&slog.Logger{}, mockDB, nil, false)
 
 			resp, err := service.ListNodes(context.Background(), api.ListNodesRequestObject{
 				Params: api.ListNodesParams{
@@ -381,7 +381,7 @@ func TestNodeService_GetNode(t *testing.T) {
 			mockDB := &mockDB{}
 			mockDB.On("GetNode", mock.Anything, tt.nodeID).Return(tt.dbNode, tt.dbError)
 
-			service := server.NewNodeService(&slog.Logger{}, mockDB, false)
+			service := server.NewNodeService(&slog.Logger{}, mockDB, nil, false)
 
 			resp, err := service.GetNode(context.Background(), api.GetNodeRequestObject{
 				NodeID: tt.nodeID,
@@ -697,7 +697,7 @@ func TestNodeService_DeleteNode(t *testing.T) {
 
 			mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 
-			service := server.NewNodeService(&slog.Logger{}, mockDB, false)
+			service := server.NewNodeService(&slog.Logger{}, mockDB, nil, false)
 
 			var body *api.DeleteNodeJSONRequestBody
 			if tt.machineHealthIssue != nil || tt.forceUnreachable {
@@ -976,7 +976,7 @@ func TestNodeService_ListNodes_ControlPlaneRollout(t *testing.T) {
 		}, nil,
 	)
 
-	service := server.NewNodeService(&slog.Logger{}, mockDB, false)
+	service := server.NewNodeService(&slog.Logger{}, mockDB, nil, false)
 
 	resp, err := service.ListNodes(context.Background(), api.ListNodesRequestObject{})
 	require.NoError(t, err)
@@ -1050,7 +1050,7 @@ func TestNodeService_GetNode_ControlPlaneRollout(t *testing.T) {
 		[]db.ControlPlaneConfiguration{{ID: driftedCfgID, Config: driftedSpec}}, nil,
 	)
 
-	service := server.NewNodeService(&slog.Logger{}, mockDB, false)
+	service := server.NewNodeService(&slog.Logger{}, mockDB, nil, false)
 
 	resp, err := service.GetNode(context.Background(), api.GetNodeRequestObject{NodeID: nodeID})
 	require.NoError(t, err)
@@ -1146,7 +1146,7 @@ func TestNodeService_DeleteControlPlaneNodeThroughController(t *testing.T) {
 			mockDB := &mockDB{MockTx: tx}
 			mockDB.On("RunInTx", mock.Anything, mock.Anything).Return(nil)
 
-			service := server.NewNodeService(&slog.Logger{}, mockDB, true)
+			service := server.NewNodeService(&slog.Logger{}, mockDB, nil, true)
 
 			resp, err := service.DeleteNode(context.Background(), api.DeleteNodeRequestObject{
 				NodeID: tt.target.ID,

@@ -706,7 +706,7 @@ func TestUnit_NodePoolControllerControlPlaneSurgeRequiresVIP(t *testing.T) {
 				return nodeSet.ID == currentNodeSetID && nodeSet.DesiredCount == 1
 			})).Return(updatedCurrentNodeSet, nil).Maybe()
 
-			npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+			npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 			_, err := npc.Reconcile(ctx, dbreconcile.NodePoolKey(poolID))
 			require.NoError(t, err)
 			mockTx.AssertNumberOfCalls(t, "UpdateNodeSet", 1+tc.wantDesired)
@@ -800,7 +800,7 @@ func TestUnit_NodePoolControllerReplacementRequiresVIP(t *testing.T) {
 					})).Return(updated, nil).Once()
 				}
 
-				npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()))
+				npc := nodepool.NewController(config.Config{}, slog.Default(), dbwrapper.New(mockDB, slog.Default()), nil, "")
 				_, err := npc.Reconcile(context.Background(), dbreconcile.NodePoolKey(pool.ID))
 				if tc.clusterError != nil {
 					require.ErrorIs(t, err, tc.clusterError)

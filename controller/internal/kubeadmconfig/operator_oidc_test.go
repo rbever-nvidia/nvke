@@ -479,6 +479,7 @@ func TestBuildOIDCAuthenticationConfigSharedProviderUnchanged(t *testing.T) {
 		},
 		ClaimMappings: OIDCClaimMappings{
 			Username: OIDCPrefixedClaimOrExpression{Claim: "sub", Prefix: stringPtr("")},
+			Groups:   OIDCPrefixedClaimOrExpression{Expression: oidcNodeBootstrapperExpression},
 		},
 	}, got.JWT[0])
 }

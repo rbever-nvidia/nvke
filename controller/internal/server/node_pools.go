@@ -61,15 +61,19 @@ func NewNodePoolService(
 	teleportCfg config.TeleportConfig,
 	supportedInfraProviders []string,
 	useControlPlaneController bool,
-	machineDeploymentWorkersEnabled bool,
+	machineDeploymentWorkersEnabled ...bool,
 ) *nodePoolService {
+	mdWorkersEnabled := false
+	if len(machineDeploymentWorkersEnabled) > 0 {
+		mdWorkersEnabled = machineDeploymentWorkersEnabled[0]
+	}
 	return &nodePoolService{
 		logger:                          logger,
 		db:                              database,
 		teleportCfg:                     teleportCfg,
 		providers:                       newProviderSupport(supportedInfraProviders),
 		useControlPlaneController:       useControlPlaneController,
-		machineDeploymentWorkersEnabled: machineDeploymentWorkersEnabled,
+		machineDeploymentWorkersEnabled: mdWorkersEnabled,
 	}
 }
 
@@ -804,7 +808,7 @@ func apiNodePoolFromDB(dbNodePool *db.NodePool) api.NodePool {
 	if dbNodePool.KubeReservedMemory != "" {
 		kubeReservedMemory = &dbNodePool.KubeReservedMemory
 	}
-	
+
 	return api.NodePool{
 		ID:                          dbNodePool.ID,
 		ClusterID:                   dbNodePool.ClusterID,

@@ -39,15 +39,19 @@ func NewServer(
 	database db.DB,
 	temporalClient client.Client,
 	authn *auth.Authenticator,
-	k8sClient ctrlclient.Client,
+	k8sClient ...ctrlclient.Client,
 ) (*http.Server, error) {
 	m := http.NewServeMux()
+	var managementK8sClient ctrlclient.Client
+	if len(k8sClient) > 0 {
+		managementK8sClient = k8sClient[0]
+	}
 
 	openapiSpec, err := api.GetSwagger()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load OpenAPI spec: %w", err)
 	}
-	serverImpl := NewServerImpl(cfg, logger, database, temporalClient, k8sClient)
+	serverImpl := NewServerImpl(cfg, logger, database, temporalClient, managementK8sClient)
 	strictHandler := api.NewStrictHandlerWithOptions(serverImpl, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("OpenAPI StrictServer request error", "error", err)

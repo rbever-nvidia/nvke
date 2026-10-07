@@ -49,6 +49,6 @@ func NewActivities(
 	}
 }
 
-func (a *Activities) nodeAgentBootstrapFiles() ([]db.CloudInitFile, error) {
+func (a *Activities) nodeAgentBootstrapFiles(_ db.Node) ([]db.CloudInitFile, error) {
 	return capi.BuildNodeAgentBootstrapFiles(a.cfg, a.controllerClientCABundle)
 }
