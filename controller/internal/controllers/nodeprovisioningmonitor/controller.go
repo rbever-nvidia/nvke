@@ -24,6 +24,11 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/kube"
 )
 
+const (
+	labelNKEClusterName = "internal.nke.nvidia.com/nkecluster-name"
+	labelNKEClusterPool = "internal.nke.nvidia.com/node-pool-name"
+)
+
 // Controller watches nodes that are in provisioning
 // and recycles them once they exceed the configured timeout.
 type Controller struct {
@@ -68,6 +73,13 @@ func (c *Controller) SetupWithManager(mgr manager.Manager) error {
 				Operator: metav1.LabelSelectorOpExists,
 			}}},
 			Map: nodePoolKeyForMachine,
+		}, {
+			Object: &clusterv1.Machine{},
+			LabelSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      labelNKEClusterPool,
+				Operator: metav1.LabelSelectorOpExists,
+			}}},
+			Map: directNodePoolKeyForMachine,
 		}},
 	})
 }
@@ -78,6 +90,23 @@ func nodePoolKeyForMachine(_ context.Context, object client.Object) []dbreconcil
 		return nil
 	}
 	return []dbreconcile.Key{dbreconcile.NodePoolKey(nodePoolID)}
+}
+
+func directNodePoolKeyForMachine(_ context.Context, object client.Object) []dbreconcile.Key {
+	nodePoolID, ok := directNodePoolIDFromLabels(object.GetLabels())
+	if !ok {
+		return nil
+	}
+	return []dbreconcile.Key{dbreconcile.NodePoolKey(nodePoolID)}
+}
+
+func directNodePoolIDFromLabels(labels map[string]string) (uuid.UUID, bool) {
+	clusterName := labels[labelNKEClusterName]
+	poolName := labels[labelNKEClusterPool]
+	if clusterName == "" || poolName == "" {
+		return uuid.Nil, false
+	}
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(clusterName+"/"+poolName)), true
 }
 
 func (c *Controller) Reconcile(ctx context.Context, key dbreconcile.Key) (reconcile.Result, error) {

@@ -10,6 +10,10 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capiconditions "sigs.k8s.io/cluster-api/util/conditions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/dsx-ai-factory/nke/controller/api"
@@ -116,7 +120,97 @@ func (s *nodePoolService) ListNodePools(ctx context.Context, req api.ListNodePoo
 	if err := s.projectCurrentMachineSetIDs(ctx, dbNodePools, apiNodePools); err != nil {
 		return nil, err
 	}
+	capiNodePools, err := s.listNKEClusterMachineDeploymentNodePools(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	apiNodePools = append(apiNodePools, capiNodePools...)
 	return api.ListNodePools200JSONResponse{NodePools: apiNodePools}, nil
+}
+
+func (s *nodePoolService) listNKEClusterMachineDeploymentNodePools(ctx context.Context, filters db.NodePoolFilters) ([]api.NodePool, error) {
+	if s.k8sClient == nil {
+		return nil, nil
+	}
+
+	clusterIDsByName, clusterName, err := s.clusterIDsForNKEClusterNodePoolProjection(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	if filters.ClusterID != nil && clusterName == "" {
+		return nil, nil
+	}
+
+	options := []ctrlclient.ListOption{
+		ctrlclient.InNamespace(constants.NamespaceNKESystem),
+		ctrlclient.HasLabels{labelNKEClusterName, labelNKEClusterPool},
+	}
+	if clusterName != "" {
+		options = append(options, ctrlclient.MatchingLabels{clusterv1.ClusterNameLabel: clusterName})
+	}
+	if filters.Name != nil && *filters.Name != "" {
+		options = append(options, ctrlclient.MatchingLabels{labelNKEClusterPool: *filters.Name})
+	}
+
+	machineDeployments := &clusterv1.MachineDeploymentList{}
+	if err := s.k8sClient.List(ctx, machineDeployments, options...); err != nil {
+		return nil, fmt.Errorf("listing NKECluster MachineDeployments: %w", err)
+	}
+
+	machineSets := &clusterv1.MachineSetList{}
+	if err := s.k8sClient.List(ctx, machineSets, ctrlclient.InNamespace(constants.NamespaceNKESystem), ctrlclient.HasLabels{clusterv1.MachineDeploymentNameLabel}); err != nil {
+		return nil, fmt.Errorf("listing NKECluster MachineSets: %w", err)
+	}
+	machineSetsByDeployment := make(map[string][]clusterv1.MachineSet)
+	for i := range machineSets.Items {
+		name := machineSets.Items[i].Labels[clusterv1.MachineDeploymentNameLabel]
+		machineSetsByDeployment[name] = append(machineSetsByDeployment[name], machineSets.Items[i])
+	}
+
+	apiNodePools := make([]api.NodePool, 0, len(machineDeployments.Items))
+	for i := range machineDeployments.Items {
+		md := &machineDeployments.Items[i]
+		clusterID, ok := clusterIDsByName[md.Labels[clusterv1.ClusterNameLabel]]
+		if !ok {
+			continue
+		}
+		nodePool := apiNodePoolFromMachineDeployment(md, clusterID, currentMachineSetID(machineSetsByDeployment[md.Name]))
+		if nodePool != nil {
+			apiNodePools = append(apiNodePools, *nodePool)
+		}
+	}
+	return apiNodePools, nil
+}
+
+func (s *nodePoolService) clusterIDsForNKEClusterNodePoolProjection(ctx context.Context, filters db.NodePoolFilters) (map[string]uuid.UUID, string, error) {
+	if filters.ClusterID != nil {
+		cluster, err := s.db.GetCluster(ctx, *filters.ClusterID)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return nil, "", nil
+			}
+			return nil, "", fmt.Errorf("getting cluster %s for MachineDeployment node pool projection: %w", *filters.ClusterID, err)
+		}
+		return map[string]uuid.UUID{cluster.Name: cluster.ID}, cluster.Name, nil
+	}
+
+	clusterFilters := db.ClusterFilters{}
+	if filters.ClusterName != nil && *filters.ClusterName != "" {
+		clusterFilters.Name = filters.ClusterName
+	}
+	clusters, err := s.db.ListClusters(ctx, clusterFilters)
+	if err != nil {
+		return nil, "", fmt.Errorf("listing clusters for MachineDeployment node pool projection: %w", err)
+	}
+	out := make(map[string]uuid.UUID, len(clusters))
+	for i := range clusters {
+		out[clusters[i].Name] = clusters[i].ID
+	}
+	clusterName := ""
+	if filters.ClusterName != nil {
+		clusterName = *filters.ClusterName
+	}
+	return out, clusterName, nil
 }
 
 func (s *nodePoolService) CreateNodePool(
@@ -353,7 +447,14 @@ func (s *nodePoolService) GetNodePool(ctx context.Context, req api.GetNodePoolRe
 	dbNodePool, err := s.db.GetNodePool(ctx, req.NodePoolID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return api.GetNodePool404Response{}, nil
+			nodePool, found, err := s.getNKEClusterMachineDeploymentNodePool(ctx, req.NodePoolID)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				return api.GetNodePool404Response{}, nil
+			}
+			return api.GetNodePool200JSONResponse(nodePool), nil
 		}
 		return nil, fmt.Errorf("failed to get node pool: %w", err)
 	}
@@ -364,6 +465,19 @@ func (s *nodePoolService) GetNodePool(ctx context.Context, req api.GetNodePoolRe
 		return nil, err
 	}
 	return api.GetNodePool200JSONResponse(nodePools[0]), nil
+}
+
+func (s *nodePoolService) getNKEClusterMachineDeploymentNodePool(ctx context.Context, id uuid.UUID) (api.NodePool, bool, error) {
+	nodePools, err := s.listNKEClusterMachineDeploymentNodePools(ctx, db.NodePoolFilters{})
+	if err != nil {
+		return api.NodePool{}, false, err
+	}
+	for i := range nodePools {
+		if nodePools[i].ID == id {
+			return nodePools[i], true, nil
+		}
+	}
+	return api.NodePool{}, false, nil
 }
 
 func (s *nodePoolService) DeleteNodePool(
@@ -837,6 +951,121 @@ func apiNodePoolFromDB(dbNodePool *db.NodePool) api.NodePool {
 			Provisioned:  apiConditionFromDB(dbNodePool.Conditions.Provisioned),
 			Deleting:     apiConditionFromDB(dbNodePool.Conditions.Deleting),
 		},
+	}
+}
+
+func apiNodePoolFromMachineDeployment(md *clusterv1.MachineDeployment, clusterID uuid.UUID, currentNodeSetID *uuid.UUID) *api.NodePool {
+	if md == nil {
+		return nil
+	}
+	id, ok := nodePoolIDFromLabels(md.Labels)
+	if !ok {
+		return nil
+	}
+
+	desired := 1
+	if md.Spec.Replicas != nil {
+		desired = int(*md.Spec.Replicas)
+	}
+	at := md.CreationTimestamp.Time
+	deleting := md.DeletionTimestamp != nil
+	actual := int(ptr.Deref(md.Status.Replicas, 0))
+	available := int(ptr.Deref(md.Status.AvailableReplicas, 0))
+	ready := int(ptr.Deref(md.Status.ReadyReplicas, 0))
+	availableCondition := capiconditions.Get(md, clusterv1.MachineDeploymentAvailableCondition)
+	provisioned := !deleting &&
+		md.Status.ObservedGeneration == md.Generation &&
+		actual == desired &&
+		available >= desired &&
+		ready >= desired &&
+		availableCondition != nil &&
+		availableCondition.Status == metav1.ConditionTrue
+	provisioning := !deleting && !provisioned
+	message := machineDeploymentNodePoolProgressMessage(md, actual, available, desired)
+	provisioningCondition := db.Condition{
+		Status:             db.ConditionStatusFromBool(provisioning),
+		Message:            message,
+		LastTransitionTime: at,
+	}
+	provisionedCondition := db.Condition{
+		Status:             db.ConditionStatusFromBool(provisioned),
+		Message:            message,
+		LastTransitionTime: at,
+	}
+	deletingCondition := boolCondition(deleting, at)
+	if condition := capiconditions.Get(md, clusterv1.MachineDeploymentDeletingCondition); condition != nil {
+		deletingCondition = dbConditionFromMetav1(condition)
+	}
+	teleportEnabled := false
+
+	return &api.NodePool{
+		ID:                          id,
+		ClusterID:                   clusterID,
+		Name:                        md.Labels[labelNKEClusterPool],
+		KubernetesVersion:           md.Spec.Template.Spec.Version,
+		ControlPlane:                false,
+		NodeLabels:                  nil,
+		DesiredNodeCount:            desired,
+		AutoProvisionDisabled:       false,
+		AutoModeDisabled:            false,
+		ProvisioningMonitorDisabled: false,
+		RecycleBudget:               0,
+		CurrentNodeSetID:            currentNodeSetID,
+		TeleportEnabled:             &teleportEnabled,
+		Conditions: api.NodePoolConditions{
+			Provisioning: apiConditionFromDB(provisioningCondition),
+			Provisioned:  apiConditionFromDB(provisionedCondition),
+			Deleting:     apiConditionFromDB(deletingCondition),
+		},
+	}
+}
+
+func machineDeploymentNodePoolProgressMessage(md *clusterv1.MachineDeployment, actual, available, desired int) string {
+	counts := fmt.Sprintf("%d of %d replicas available", available, desired)
+	if md.Status.ObservedGeneration != md.Generation {
+		return fmt.Sprintf("Waiting for MachineDeployment generation %d to be observed; %s", md.Generation, counts)
+	}
+
+	for _, conditionType := range []string{
+		clusterv1.MachineDeploymentScalingUpCondition,
+		clusterv1.MachineDeploymentScalingDownCondition,
+		clusterv1.MachineDeploymentRollingOutCondition,
+	} {
+		condition := capiconditions.Get(md, conditionType)
+		if condition != nil && condition.Status == metav1.ConditionTrue {
+			return fmt.Sprintf("%s; %s", conditionMessage(condition), counts)
+		}
+	}
+
+	availableCondition := capiconditions.Get(md, clusterv1.MachineDeploymentAvailableCondition)
+	if availableCondition != nil && availableCondition.Status != metav1.ConditionTrue {
+		return fmt.Sprintf("%s; %s", conditionMessage(availableCondition), counts)
+	}
+	if actual != desired {
+		return fmt.Sprintf("Waiting for MachineDeployment replica count to converge; %s", counts)
+	}
+	return fmt.Sprintf("MachineDeployment is fully available; %s", counts)
+}
+
+func conditionMessage(condition *metav1.Condition) string {
+	if condition.Message != "" {
+		return fmt.Sprintf("%s: %s", condition.Reason, condition.Message)
+	}
+	return condition.Reason
+}
+
+func dbConditionFromMetav1(condition *metav1.Condition) db.Condition {
+	status := db.ConditionStatusUnknown
+	switch condition.Status {
+	case metav1.ConditionTrue:
+		status = db.ConditionStatusTrue
+	case metav1.ConditionFalse:
+		status = db.ConditionStatusFalse
+	}
+	return db.Condition{
+		Status:             status,
+		Message:            conditionMessage(condition),
+		LastTransitionTime: condition.LastTransitionTime.Time,
 	}
 }
 

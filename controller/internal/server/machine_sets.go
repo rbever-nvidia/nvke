@@ -17,13 +17,27 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 )
 
+const (
+	labelNKEClusterName = "internal.nke.nvidia.com/nkecluster-name"
+	labelNKEClusterPool = "internal.nke.nvidia.com/node-pool-name"
+)
+
+func nodePoolIDFromLabels(labels map[string]string) (uuid.UUID, bool) {
+	if id, err := uuid.Parse(labels[constants.LabelKeyNodePoolID]); err == nil {
+		return id, true
+	}
+	clusterName := labels[labelNKEClusterName]
+	poolName := labels[labelNKEClusterPool]
+	if clusterName == "" || poolName == "" {
+		return uuid.Nil, false
+	}
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(clusterName+"/"+poolName)), true
+}
+
 func machineDeploymentListOptions(nodePoolID *uuid.UUID, clusterName string) []ctrlclient.ListOption {
 	options := []ctrlclient.ListOption{
 		ctrlclient.InNamespace(constants.NamespaceNKESystem),
 		ctrlclient.HasLabels{clusterv1.MachineDeploymentNameLabel},
-	}
-	if nodePoolID != nil {
-		options = append(options, ctrlclient.MatchingLabels{constants.LabelKeyNodePoolID: nodePoolID.String()})
 	}
 	if clusterName != "" {
 		options = append(options, ctrlclient.MatchingLabels{clusterv1.ClusterNameLabel: clusterName})
@@ -44,7 +58,17 @@ func listMachineDeploymentMachineSets(
 	if err := k8sClient.List(ctx, machineSets, machineDeploymentListOptions(nodePoolID, "")...); err != nil {
 		return nil, fmt.Errorf("listing MachineDeployment MachineSets: %w", err)
 	}
-	return machineSets.Items, nil
+	if nodePoolID == nil {
+		return machineSets.Items, nil
+	}
+	filtered := make([]clusterv1.MachineSet, 0, len(machineSets.Items))
+	for i := range machineSets.Items {
+		id, ok := nodePoolIDFromLabels(machineSets.Items[i].Labels)
+		if ok && id == *nodePoolID {
+			filtered = append(filtered, machineSets.Items[i])
+		}
+	}
+	return filtered, nil
 }
 
 // apiNodeSetFromMachineSet projects the MachineSet identity, desired replicas,
@@ -58,8 +82,8 @@ func apiNodeSetFromMachineSet(machineSet *clusterv1.MachineSet) *api.NodeSet {
 	if err != nil {
 		return nil
 	}
-	nodePoolID, err := uuid.Parse(machineSet.Labels[constants.LabelKeyNodePoolID])
-	if err != nil {
+	nodePoolID, ok := nodePoolIDFromLabels(machineSet.Labels)
+	if !ok {
 		return nil
 	}
 
@@ -116,8 +140,8 @@ func (s *nodePoolService) projectCurrentMachineSetIDs(
 	}
 	byNodePool := make(map[uuid.UUID][]clusterv1.MachineSet)
 	for i := range machineSets {
-		nodePoolID, err := uuid.Parse(machineSets[i].Labels[constants.LabelKeyNodePoolID])
-		if err != nil {
+		nodePoolID, ok := nodePoolIDFromLabels(machineSets[i].Labels)
+		if !ok {
 			continue
 		}
 		byNodePool[nodePoolID] = append(byNodePool[nodePoolID], machineSets[i])

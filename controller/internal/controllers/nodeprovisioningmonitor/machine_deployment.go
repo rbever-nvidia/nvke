@@ -30,7 +30,7 @@ func (c *Controller) reconcileMachineDeployment(ctx context.Context, nodePoolID 
 	nodePool, err := c.db.GetNodePool(ctx, nodePoolID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return reconcile.Result{}, nil
+			return c.reconcileDirectMachineDeployment(ctx, nodePoolID)
 		}
 		return reconcile.Result{}, fmt.Errorf("getting node pool %s: %w", nodePoolID, err)
 	}
@@ -111,6 +111,68 @@ func (c *Controller) reconcileMachineDeployment(ctx context.Context, nodePoolID 
 			cluster.Name,
 			nodePool.Name,
 		)
+	}
+
+	return reconcile.Result{RequeueAfter: nextCheck}, nil
+}
+
+func (c *Controller) reconcileDirectMachineDeployment(ctx context.Context, nodePoolID uuid.UUID) (reconcile.Result, error) {
+	machines := &clusterv1.MachineList{}
+	if err := c.k8sClient.List(
+		ctx,
+		machines,
+		client.InNamespace(constants.NamespaceNKESystem),
+		client.HasLabels{labelNKEClusterName, labelNKEClusterPool},
+	); err != nil {
+		return reconcile.Result{}, fmt.Errorf("listing direct NKECluster Machines for synthetic node pool %s: %w", nodePoolID, err)
+	}
+
+	now := time.Now()
+	var nextCheck time.Duration
+	for _, machine := range machines.Items {
+		directNodePoolID, ok := directNodePoolIDFromLabels(machine.Labels)
+		if !ok || directNodePoolID != nodePoolID || !machineSetOwnedWorker(machine) {
+			continue
+		}
+
+		condition, inspectionErr := c.machineProvisioningCondition(ctx, &machine)
+		if inspectionErr != nil {
+			c.logger.Warn(
+				"Unable to inspect direct worker Machine provisioning checkpoint",
+				"cluster", machine.Labels[labelNKEClusterName],
+				"nodePool", machine.Labels[labelNKEClusterPool],
+				"machine", machine.Name,
+				"error", inspectionErr,
+			)
+		}
+		if err := c.patchMachineProvisioningCondition(ctx, &machine, condition); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		if !machine.DeletionTimestamp.IsZero() || machine.Status.NodeRef.IsDefined() {
+			continue
+		}
+
+		provisioningAge := now.Sub(machine.CreationTimestamp.Time)
+		if provisioningAge < c.cfg.NodeProvisioningTimeout {
+			untilTimeout := c.cfg.NodeProvisioningTimeout - provisioningAge
+			if nextCheck == 0 || untilTimeout < nextCheck {
+				nextCheck = untilTimeout
+			}
+			continue
+		}
+
+		c.logger.Warn(
+			"Deleting direct worker Machine that never joined within the provisioning timeout",
+			"cluster", machine.Labels[labelNKEClusterName],
+			"nodePool", machine.Labels[labelNKEClusterPool],
+			"machine", machine.Name,
+			"nodeProvisioningTimeout", c.cfg.NodeProvisioningTimeout.String(),
+			"provisioningAge", provisioningAge.String(),
+		)
+		if err := c.k8sClient.Delete(ctx, &machine); err != nil && !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("deleting direct Machine %s stuck provisioning: %w", machine.Name, err)
+		}
 	}
 
 	return reconcile.Result{RequeueAfter: nextCheck}, nil

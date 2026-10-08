@@ -140,23 +140,29 @@ func (c *MachineDeletionController) disruptionAuthorized(ctx context.Context, ma
 		return true, "CAPI Cluster is deleting", nil
 	}
 
-	// Machine's parent node pool is absent or deleting.
-	nodePoolID, err := uuid.Parse(machine.Labels[constants.LabelKeyNodePoolID])
-	if err != nil {
-		return false, "", fmt.Errorf("Machine %s/%s has invalid %s label: %w", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID, err)
-	}
-	nodePool, err := c.db.GetNodePool(ctx, nodePoolID)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return true, "node pool is absent", nil
+	// Machine's parent node pool is absent or deleting. Direct NKECluster workers
+	// do not have a db.NodePool, so they skip the database node-pool checks and
+	// rely on the tenant Node authorization checks below.
+	if nodePoolIDValue := machine.Labels[constants.LabelKeyNodePoolID]; nodePoolIDValue != "" {
+		nodePoolID, err := uuid.Parse(nodePoolIDValue)
+		if err != nil {
+			return false, "", fmt.Errorf("Machine %s/%s has invalid %s label: %w", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID, err)
 		}
-		return false, "", fmt.Errorf("getting node pool %s for Machine %s/%s: %w", nodePoolID, machine.Namespace, machine.Name, err)
-	}
-	if nodePool.Conditions.Deleting.Status == db.ConditionStatusTrue {
-		return true, "node pool is deleting", nil
-	}
-	if !nodePool.UsesMachineDeployment() {
-		return false, "", fmt.Errorf("Machine %s/%s belongs to legacy node pool %s", machine.Namespace, machine.Name, nodePool.ID)
+		nodePool, err := c.db.GetNodePool(ctx, nodePoolID)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return true, "node pool is absent", nil
+			}
+			return false, "", fmt.Errorf("getting node pool %s for Machine %s/%s: %w", nodePoolID, machine.Namespace, machine.Name, err)
+		}
+		if nodePool.Conditions.Deleting.Status == db.ConditionStatusTrue {
+			return true, "node pool is deleting", nil
+		}
+		if !nodePool.UsesMachineDeployment() {
+			return false, "", fmt.Errorf("Machine %s/%s belongs to legacy node pool %s", machine.Namespace, machine.Name, nodePool.ID)
+		}
+	} else if machine.Labels["internal.nke.nvidia.com/nkecluster-name"] == "" || machine.Labels["internal.nke.nvidia.com/node-pool-name"] == "" {
+		return false, "", fmt.Errorf("Machine %s/%s has neither %s nor direct NKECluster node-pool labels", machine.Namespace, machine.Name, constants.LabelKeyNodePoolID)
 	}
 
 	// Check if the tenant Node is already absent.

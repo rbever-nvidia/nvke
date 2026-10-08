@@ -37,18 +37,21 @@ func (s *nodeService) listMachineDeploymentWorkers(ctx context.Context, params a
 	}
 
 	machines := &clusterv1.MachineList{}
-	if err := s.k8sClient.List(ctx, machines, machineDeploymentListOptions(params.NodePoolID, clusterName)...); err != nil {
+	if err := s.k8sClient.List(ctx, machines, machineDeploymentListOptions(nil, clusterName)...); err != nil {
 		return nil, fmt.Errorf("listing MachineDeployment workers: %w", err)
 	}
-	if params.Name == nil || *params.Name == "" {
-		return machines.Items, nil
-	}
-
 	filtered := make([]clusterv1.Machine, 0, len(machines.Items))
 	for i := range machines.Items {
-		if machines.Items[i].Name == *params.Name {
-			filtered = append(filtered, machines.Items[i])
+		if params.NodePoolID != nil {
+			id, ok := nodePoolIDFromLabels(machines.Items[i].Labels)
+			if !ok || id != *params.NodePoolID {
+				continue
+			}
 		}
+		if params.Name != nil && *params.Name != "" && machines.Items[i].Name != *params.Name {
+			continue
+		}
+		filtered = append(filtered, machines.Items[i])
 	}
 	return filtered, nil
 }
@@ -98,8 +101,8 @@ func apiNodeFromMachine(machine *clusterv1.Machine) *api.Node {
 	if err != nil {
 		return nil
 	}
-	nodePoolID, err := uuid.Parse(machine.Labels[constants.LabelKeyNodePoolID])
-	if err != nil {
+	nodePoolID, ok := nodePoolIDFromLabels(machine.Labels)
+	if !ok {
 		return nil
 	}
 
@@ -167,12 +170,25 @@ func apiConditionsFromMachine(machine *clusterv1.Machine) api.NodeConditions {
 		deletingCondition = condition
 	}
 	joined := machine.Status.NodeRef.IsDefined()
-	provisionedCondition := boolCondition(joined && nodeReady.Status == db.ConditionStatusTrue, fallbackTime)
+	provisionedCondition := boolCondition(joined, fallbackTime)
 	pending := !deleting && !joined && machine.Spec.ProviderID == ""
-	provisioning := !deleting && !pending && provisionedCondition.Status != db.ConditionStatusTrue
+	provisioning := !deleting && !pending && !joined
 	provisioningCondition := boolCondition(provisioning, fallbackTime)
 	if condition, ok := machineConditionFromMachineWithReason(machine, constants.MachineConditionTypeProvisioning); ok {
 		provisioningCondition = condition
+	} else if provisioning {
+		for _, conditionType := range []string{
+			clusterv1.MachineNodeReadyCondition,
+			clusterv1.MachineNodeHealthyCondition,
+			clusterv1.MachineReadyCondition,
+		} {
+			condition, ok := machineConditionFromMachineWithReason(machine, conditionType)
+			if ok && condition.Message != "" {
+				provisioningCondition.Message = condition.Message
+				provisioningCondition.LastTransitionTime = condition.LastTransitionTime
+				break
+			}
+		}
 	}
 	for _, condition := range machine.Status.Conditions {
 		if condition.Type == constants.MachineConditionTypeProvisioning &&
