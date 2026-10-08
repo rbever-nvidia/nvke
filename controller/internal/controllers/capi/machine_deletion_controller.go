@@ -13,7 +13,10 @@ import (
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capiconditions "sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -177,8 +180,12 @@ func (c *MachineDeletionController) disruptionAuthorized(ctx context.Context, ma
 		}
 		return false, "", fmt.Errorf("getting tenant Node %s for Machine %s/%s: %w", machine.Status.NodeRef.Name, machine.Namespace, machine.Name, err)
 	}
-	if err := nodeconditions.ApplyNeedsRecycle(ctx, tenantClient, machine.Status.NodeRef.Name, "NKE Machine deletion is waiting for disruption authorization"); err != nil {
+	const authorizationMessage = "NKE Machine deletion is waiting for disruption authorization"
+	if err := nodeconditions.ApplyNeedsRecycle(ctx, tenantClient, machine.Status.NodeRef.Name, authorizationMessage); err != nil {
 		return false, "", fmt.Errorf("publishing recycle signal for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
+	}
+	if err := c.applyMachineNeedsRecycleCondition(ctx, machine, authorizationMessage); err != nil {
+		return false, "", err
 	}
 
 	// Check if the tenant Node has the termination label.
@@ -187,4 +194,24 @@ func (c *MachineDeletionController) disruptionAuthorized(ctx context.Context, ma
 		return true, "tenant Node has termination label", nil
 	}
 	return false, "", nil
+}
+
+func (c *MachineDeletionController) applyMachineNeedsRecycleCondition(ctx context.Context, machine *clusterv1.Machine, message string) error {
+	patchHelper, err := patch.NewHelper(machine, c.k8sClient)
+	if err != nil {
+		return fmt.Errorf("building patch helper for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
+	}
+	capiconditions.Set(machine, metav1.Condition{
+		Type:               constants.NodeConditionTypeNeedsRecycle,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: machine.Generation,
+		Reason:             "DisruptionAuthorizationRequested",
+		Message:            message,
+	})
+	if err := patchHelper.Patch(ctx, machine, patch.WithOwnedConditions{
+		Conditions: []string{constants.NodeConditionTypeNeedsRecycle},
+	}); err != nil {
+		return fmt.Errorf("patching recycle signal on Machine %s/%s: %w", machine.Namespace, machine.Name, err)
+	}
+	return nil
 }
