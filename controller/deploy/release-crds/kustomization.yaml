@@ -17,6 +17,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - ../../../management-engine/config/crd/bases/internal.nke.nvidia.com_controlplaneclasses.yaml
+  - ../../../management-engine/config/crd/bases/internal.nke.nvidia.com_machineclasses.yaml
+  - ../../../management-engine/config/crd/bases/internal.nke.nvidia.com_nkeclusters.yaml
   - ../../../management-engine/config/crd/bases/internal.nke.nvidia.com_machineimages.yaml
   - ../../../management-engine/config/crd/bases/internal.nke.nvidia.com_clusterreleases.yaml
   - ../../../management-engine/config/crd/bases/internal.nke.nvidia.com_nodepoolreleases.yaml

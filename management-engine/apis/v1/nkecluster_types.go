@@ -24,6 +24,37 @@ type NKEClusterSpec struct {
 	// AcceleratedRuntime selects an accelerated runtime bundle; name "none" opts out.
 	// +optional
 	AcceleratedRuntime *AcceleratedRuntimeSelection `json:"acceleratedRuntime,omitempty"`
+	// FIXME: POC: Network is the current inline provider-placement shortcut.
+	// The vpcID field and the node-pool vpcSubnetID/vpcPrefixID fields are
+	// NICo/Forge-specific infrastructure placement, not Kubernetes cluster
+	// networking. Control-plane placement is also still hidden in raw
+	// ControlPlaneClass NicoMachineTemplate data. The shape to evaluate is an
+	// NKECluster infrastructure placement reference, for example:
+	//
+	//	spec.infrastructure.placementRef:
+	//	  apiGroup: internal.nke.nvidia.com
+	//	  kind: NicoClusterPlacement
+	//	  name: nico-vms-poc
+	//
+	// Example referenced provider placement:
+	//
+	//	apiVersion: internal.nke.nvidia.com/v1
+	//	kind: NicoClusterPlacement
+	//	metadata:
+	//	  name: nico-vms-poc
+	//	spec:
+	//	  vpcID: a1b2c3d4-0002-4000-8000-000000000001
+	//	  controlPlane:
+	//	    interfaces:
+	//	      - vpcPrefixID: a1b2c3d4-0004-4000-8000-000000000001
+	//	  nodePools:
+	//	    worker:
+	//	      interfaces:
+	//	        - vpcPrefixID: a1b2c3d4-0004-4000-8000-000000000001
+	//
+	// In that model, NKECluster owns tenant intent, while the provider placement
+	// object carries NICo-specific VPC and interface attachment data for both
+	// the control plane and node pools.
 	// Network selects the existing VPC shared by the node pools.
 	// +optional
 	Network *Network `json:"network,omitempty"`

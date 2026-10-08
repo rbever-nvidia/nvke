@@ -158,6 +158,38 @@ func RenderBootstrapData(ctx context.Context, templateText string, input Bootstr
 	return rendered.String(), nil
 }
 
+// BootstrapProfile is the subset of rendered cloud-init that the template-backed CAPI bootstrap path can carry.
+type BootstrapProfile struct {
+	Files               []db.CloudInitFile
+	PreKubeadmCommands []string
+}
+
+// RenderBootstrapProfileForCAPI renders a release machineInit template and translates it into CAPI bootstrap fields.
+func RenderBootstrapProfileForCAPI(ctx context.Context, templateText string, input BootstrapDataInput) (BootstrapProfile, error) {
+	rendered, err := RenderBootstrapData(ctx, templateText, input)
+	if err != nil {
+		return BootstrapProfile{}, err
+	}
+	bootstrap, err := translateWorkerProfile(rendered, input.Cluster.CniPlugin)
+	if err != nil {
+		return BootstrapProfile{}, err
+	}
+	files := make([]db.CloudInitFile, 0, len(bootstrap.Files))
+	for _, file := range bootstrap.Files {
+		files = append(files, db.CloudInitFile{
+			Path:        file.Path,
+			Content:     file.Content,
+			Owner:       file.Owner,
+			Permissions: file.Permissions,
+			Encoding:    string(file.Encoding),
+		})
+	}
+	return BootstrapProfile{
+		Files:               files,
+		PreKubeadmCommands: append([]string(nil), bootstrap.PreKubeadmCommands...),
+	}, nil
+}
+
 // BuildNodeAgentBootstrapFiles builds the node-agent configuration files included in OS profile user data.
 func BuildNodeAgentBootstrapFiles(cfg config.Config, controllerClientCABundle string) ([]db.CloudInitFile, error) {
 	files := make([]db.CloudInitFile, 0, 2)

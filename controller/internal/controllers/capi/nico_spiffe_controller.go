@@ -113,20 +113,28 @@ func (c *NicoSpiffeController) Reconcile(ctx context.Context, req ctrl.Request) 
 		logger.Info("Waiting for Machine controller to set OwnerRef on NicoMachine")
 		return ctrl.Result{}, nil
 	}
+
+	method := db.SpireAttestationMethodTPM
 	hostID := machine.GetAnnotations()[constants.MachineAnnotationKeyHostID]
 	if hostID == "" {
-		logger.Debug("Machine has no host-id annotation, skipping SPIRE agent path reconciliation")
-		return ctrl.Result{}, nil
+		if !machineSetOwnedWorker(machine) {
+			logger.Debug("Machine has no host-id annotation, skipping SPIRE agent path reconciliation")
+			return ctrl.Result{}, nil
+		}
+		// FIXME: POC: MachineDeployment workers need an explicit attestation-method contract.
+		// This POC uses TPM because the nico-vms worker MachineClass boots a TPM-capable image.
+	} else {
+		nodeID, err := uuid.Parse(hostID)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("invalid host ID %q on Machine %s/%s: %w", hostID, machine.Namespace, machine.Name, err)
+		}
+		node, err := c.nodes.GetNode(ctx, nodeID)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("get node %s for Machine %s/%s: %w", nodeID, machine.Namespace, machine.Name, err)
+		}
+		method = node.SpireAttestationMethod
 	}
-	nodeID, err := uuid.Parse(hostID)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("invalid host ID %q on Machine %s/%s: %w", hostID, machine.Namespace, machine.Name, err)
-	}
-	node, err := c.nodes.GetNode(ctx, nodeID)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("get node %s for Machine %s/%s: %w", nodeID, machine.Namespace, machine.Name, err)
-	}
-	method := node.SpireAttestationMethod
+
 	spireAgentSpiffeIDPath, expectedPathPrefix := c.spireAgentSpiffeIDPath(nicoMachine, method)
 	if spireAgentSpiffeIDPath == "" {
 		if method == db.SpireAttestationMethodJoinToken {

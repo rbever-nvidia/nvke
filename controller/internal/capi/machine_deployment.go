@@ -408,6 +408,7 @@ type workerProfileCloudInitFile struct {
 	Path        string `yaml:"path"`
 	Owner       string `yaml:"owner"`
 	Permissions string `yaml:"permissions"`
+	Encoding    string `yaml:"encoding"`
 	Content     string `yaml:"content"`
 }
 
@@ -452,6 +453,7 @@ func translateWorkerProfile(userData string, cniPlugin db.CniPlugin) (workerBoot
 			Path:        file.Path,
 			Owner:       file.Owner,
 			Permissions: file.Permissions,
+			Encoding:    bootstrapv1.Encoding(file.Encoding),
 			Content:     file.Content,
 		})
 	}

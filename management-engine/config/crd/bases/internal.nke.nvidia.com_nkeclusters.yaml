@@ -296,7 +296,24 @@ spec:
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
               network:
-                description: Network selects the existing VPC shared by the node pools.
+                description: "FIXME: POC: Network is the current inline provider-placement
+                  shortcut.\nThe vpcID field and the node-pool vpcSubnetID/vpcPrefixID
+                  fields are\nNICo/Forge-specific infrastructure placement, not Kubernetes
+                  cluster\nnetworking. Control-plane placement is also still hidden
+                  in raw\nControlPlaneClass NicoMachineTemplate data. The shape to
+                  evaluate is an\nNKECluster infrastructure placement reference, for
+                  example:\n\n\tspec.infrastructure.placementRef:\n\t  apiGroup: internal.nke.nvidia.com\n\t
+                  \ kind: NicoClusterPlacement\n\t  name: nico-vms-poc\n\nExample
+                  referenced provider placement:\n\n\tapiVersion: internal.nke.nvidia.com/v1\n\tkind:
+                  NicoClusterPlacement\n\tmetadata:\n\t  name: nico-vms-poc\n\tspec:\n\t
+                  \ vpcID: a1b2c3d4-0002-4000-8000-000000000001\n\t  controlPlane:\n\t
+                  \   interfaces:\n\t      - vpcPrefixID: a1b2c3d4-0004-4000-8000-000000000001\n\t
+                  \ nodePools:\n\t    worker:\n\t      interfaces:\n\t        - vpcPrefixID:
+                  a1b2c3d4-0004-4000-8000-000000000001\n\nIn that model, NKECluster
+                  owns tenant intent, while the provider placement\nobject carries
+                  NICo-specific VPC and interface attachment data for both\nthe control
+                  plane and node pools.\nNetwork selects the existing VPC shared by
+                  the node pools."
                 properties:
                   vpcID:
                     description: VPCID is the ID of the VPC in which node pools are
@@ -316,8 +333,9 @@ spec:
                     join the cluster as worker nodes.
                   properties:
                     instanceType:
-                      description: InstanceType selects the machine type used by the
-                        pool and cannot change after creation.
+                      description: |-
+                        InstanceType selects the machine type used by the pool and cannot change after creation.
+                        FIXME: POC: instanceType remains as the pre-MachineClass field while this API shape is evaluated.
                       maxLength: 253
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -325,6 +343,13 @@ spec:
                       x-kubernetes-validations:
                       - message: instanceType is immutable
                         rule: self == oldSelf
+                    machineClass:
+                      description: MachineClass selects operator-owned machine-size
+                        policy for this pool.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
                     name:
                       description: Name uniquely identifies this pool within the cluster,
                         including across updates.
@@ -486,6 +511,12 @@ spec:
                           - effect
                           x-kubernetes-list-type: map
                       type: object
+                    vpcPrefixID:
+                      description: VPCPrefixID identifies an existing VPC prefix within
+                        spec.network.vpcID for this pool's nodes.
+                      format: uuid
+                      maxLength: 36
+                      type: string
                     vpcSubnetID:
                       description: VPCSubnetID identifies an existing subnet within
                         spec.network.vpcID for this pool's nodes.
@@ -493,12 +524,15 @@ spec:
                       maxLength: 36
                       type: string
                   required:
-                  - instanceType
                   - name
                   - nodeProfile
                   - replicas
-                  - vpcSubnetID
                   type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of vpcSubnetID or vpcPrefixID must be set
+                    rule: has(self.vpcSubnetID) != has(self.vpcPrefixID)
+                  - message: exactly one of machineClass or instanceType must be set
+                    rule: has(self.machineClass) != has(self.instanceType)
                 maxItems: 64
                 type: array
                 x-kubernetes-list-map-keys:

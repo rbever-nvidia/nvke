@@ -5,18 +5,30 @@ metadata:
   labels:
     {{- include "controller.labels" . | nindent 4 }}
 rules:
-  # Read the releases. CWE resolves osProfile names from these
-  # cluster-scoped resources and does not write them.
+  # Read the management-engine resources that drive release resolution and
+  # tenant NKECluster reconciliation.
   - apiGroups:
       - internal.nke.nvidia.com
     resources:
       - machineimages
       - clusterreleases
       - nodepoolreleases
+      - machineclasses
+      - controlplaneclasses
     verbs:
       - get
       - list
       - watch
+  - apiGroups:
+      - internal.nke.nvidia.com
+    resources:
+      - nkeclusters
+    verbs:
+      - get
+      - list
+      - watch
+      - patch
+      - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

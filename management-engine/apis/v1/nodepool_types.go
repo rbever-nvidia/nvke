@@ -6,20 +6,33 @@ package v1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // NodePool configures a named group of machines that join the cluster as worker nodes.
+// +kubebuilder:validation:XValidation:rule="has(self.vpcSubnetID) != has(self.vpcPrefixID)",message="exactly one of vpcSubnetID or vpcPrefixID must be set"
+// +kubebuilder:validation:XValidation:rule="has(self.machineClass) != has(self.instanceType)",message="exactly one of machineClass or instanceType must be set"
 type NodePool struct {
 	// Name uniquely identifies this pool within the cluster, including across updates.
 	Name ResourceName `json:"name"`
+	// MachineClass selects operator-owned machine-size policy for this pool.
+	// +optional
+	MachineClass ResourceName `json:"machineClass,omitempty"`
 	// InstanceType selects the machine type used by the pool and cannot change after creation.
+	// FIXME: POC: instanceType remains as the pre-MachineClass field while this API shape is evaluated.
+	// +optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="instanceType is immutable"
-	InstanceType ResourceName `json:"instanceType"`
+	InstanceType ResourceName `json:"instanceType,omitempty"`
 	// Replicas is the required number of nodes requested for this pool. Zero requests no nodes.
 	// +required
 	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas"`
 	// VPCSubnetID identifies an existing subnet within spec.network.vpcID for this pool's nodes.
+	// +optional
 	// +kubebuilder:validation:Format=uuid
 	// +kubebuilder:validation:MaxLength=36
-	VPCSubnetID string `json:"vpcSubnetID"`
+	VPCSubnetID string `json:"vpcSubnetID,omitempty"`
+	// VPCPrefixID identifies an existing VPC prefix within spec.network.vpcID for this pool's nodes.
+	// +optional
+	// +kubebuilder:validation:Format=uuid
+	// +kubebuilder:validation:MaxLength=36
+	VPCPrefixID string `json:"vpcPrefixID,omitempty"`
 	// NodeProfile selects the machine image and startup configuration as <profile>:<tag>.
 	NodeProfile NodeProfileReference `json:"nodeProfile"`
 	// UserParams configures labels and taints for the pool's nodes.

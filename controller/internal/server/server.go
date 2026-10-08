@@ -213,16 +213,20 @@ func NewServerImpl(
 	nodeService := NewNodeService(logger, database, temporalClient, cfg.UseControlPlaneControllerForControlPlane())
 	nodeService.k8sClient = k8sClient
 
+	clusterService := NewClusterService(
+		logger,
+		database,
+		nodePoolService,
+		cfg.Teleport,
+		cfg.NkeOIDCAuth.Enabled,
+		cfg.SupportedInfraProviders,
+		cfg.UseControlPlaneControllerForControlPlane(),
+		WithLegacyWritePolicy(cfg.LegacyWritePolicy),
+	)
+	clusterService.k8sClient = k8sClient
+
 	return &serverImpl{
-		clusterService: *NewClusterService(
-			logger,
-			database,
-			nodePoolService,
-			cfg.Teleport,
-			cfg.NkeOIDCAuth.Enabled,
-			cfg.SupportedInfraProviders,
-			cfg.UseControlPlaneControllerForControlPlane(),
-		),
+		clusterService:       *clusterService,
 		nodePoolService:      *nodePoolService,
 		nodeSetService:       *nodeSetService,
 		nodeService:          *nodeService,

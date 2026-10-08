@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: controlplaneclasses.internal.nke.nvidia.com
+spec:
+  group: internal.nke.nvidia.com
+  names:
+    kind: ControlPlaneClass
+    listKind: ControlPlaneClassList
+    plural: controlplaneclasses
+    singular: controlplaneclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.replicas.default
+      name: Replicas
+      type: integer
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: ControlPlaneClass publishes reusable control-plane policy and
+          provider configuration.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              FIXME: POC: This is just a placeholder for now for POC work.
+              The shape was just agent derived to meet the current needs of the POC, not intended to be the final shape.
+
+              ControlPlaneClassSpec defines reusable control-plane sizing and provider configuration.
+            properties:
+              bootstrap:
+                description: Bootstrap defines extra CABPK bootstrap inputs for control-plane
+                  machines.
+                properties:
+                  files:
+                    description: Files are additional cloud-init files rendered into
+                      the KubeadmConfig.
+                    items:
+                      description: ControlPlaneClassBootstrapFile defines one control-plane
+                        bootstrap file.
+                      properties:
+                        content:
+                          type: string
+                        encoding:
+                          type: string
+                        owner:
+                          type: string
+                        path:
+                          type: string
+                        permissions:
+                          type: string
+                      required:
+                      - content
+                      - path
+                      type: object
+                    type: array
+                  preKubeadmCommands:
+                    description: PreKubeadmCommands run before kubeadm on control-plane
+                      machines.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              machine:
+                description: Machine defines provider-specific control-plane machine
+                  template inputs.
+                properties:
+                  infrastructureTemplatePreferences:
+                    description: |-
+                      FIXME: POC: These raw templates still carry NICo placement such as vpcID
+                      and vpcPrefixID. That data likely belongs in provider-specific cluster
+                      placement, not in a reusable ControlPlaneClass.
+                      InfrastructureTemplatePreferences are ordered infrastructure machine templates.
+                      The controller tries them in order when provisioning or replacing control-plane machines.
+                    items:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    minItems: 1
+                    type: array
+                  machineClass:
+                    description: MachineClass selects machine-size-dependent provider
+                      and kubelet policy.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  spireAttestationMethod:
+                    description: SpireAttestationMethod selects the SPIRE node attestation
+                      method for control-plane machines.
+                    enum:
+                    - tpm
+                    - joinToken
+                    - dsxImds
+                    type: string
+                required:
+                - infrastructureTemplatePreferences
+                type: object
+              replicas:
+                description: Replicas defines the control-plane size this class requests
+                  by default.
+                properties:
+                  default:
+                    description: Default is the number of control-plane machines for
+                      clusters using this class.
+                    minimum: 1
+                    type: integer
+                  maxSurge:
+                    description: MaxSurge is the maximum number of extra control-plane
+                      machines during replacement.
+                    minimum: 0
+                    type: integer
+                required:
+                - default
+                type: object
+            required:
+            - machine
+            - replicas
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

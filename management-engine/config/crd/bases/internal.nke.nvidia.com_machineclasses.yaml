@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: machineclasses.internal.nke.nvidia.com
+spec:
+  group: internal.nke.nvidia.com
+  names:
+    kind: MachineClass
+    listKind: MachineClassList
+    plural: machineclasses
+    singular: machineclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provider
+      name: Provider
+      type: string
+    - jsonPath: .spec.nico.instanceTypeID
+      name: InstanceType
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: MachineClass publishes reusable provider and kubelet policy for
+          a machine size.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: "FIXME: POC: MachineClass is a provisional shape for exploring
+              where\nmachine-size-dependent provider and kubelet policy should live.
+              The inline\nprovider block is the current throwaway shape, kept so this
+              branch can\nresolve a NICo instance type without adding another CRD.
+              The shape to\nevaluate is an NKE MachineClass that owns kubelet policy
+              and points at\nprovider infrastructure policy, for example:\n\n\tspec.infrastructure.classRef:\n\t
+              \ apiGroup: internal.nke.nvidia.com or infrastructure.cluster.x-k8s.io\n\t
+              \ kind: NicoMachineClass\n\t  name: nico-vms-cpu2-mem2gb-disk30gb\n\nExample
+              referenced provider class:\n\n\tapiVersion: internal.nke.nvidia.com/v1\n\tkind:
+              NicoMachineClass\n\tmetadata:\n\t  name: nico-vms-cpu2-mem2gb-disk30gb\n\tspec:\n\t
+              \ instanceTypeID: a1b2c3d4-0005-4000-8000-000000000001\n\nIn that model,
+              NicoMachineClass carries instanceTypeID while NKECluster still\nsupplies
+              network placement such as VPC, subnet, and VPC prefix.\n\nMachineClassSpec
+              defines operator-owned machine policy selected by tenant pools\nand
+              control-plane classes."
+            properties:
+              kubelet:
+                description: Kubelet defines kubelet policy that depends on the selected
+                  machine size.
+                properties:
+                  kubeReservedMemory:
+                    description: KubeReservedMemory is reserved for Kubernetes daemons.
+                    type: string
+                  systemReservedMemory:
+                    description: SystemReservedMemory is reserved for system daemons.
+                    type: string
+                type: object
+              nico:
+                description: NICo defines provider-specific inputs for NICo-backed
+                  machines.
+                properties:
+                  instanceTypeID:
+                    description: InstanceTypeID is the NICo instance type used for
+                      machines in this class.
+                    format: uuid
+                    maxLength: 36
+                    type: string
+                required:
+                - instanceTypeID
+                type: object
+              provider:
+                description: Provider selects the infrastructure provider contract
+                  used by this class.
+                enum:
+                - nico
+                type: string
+            required:
+            - provider
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

@@ -23,6 +23,10 @@ const (
 	// InfraProviderInfra is the API-facing name for the generic CAPI provider block.
 	InfraProviderInfra = "infra"
 
+	LegacyWritePolicyAllow        LegacyWritePolicy = "Allow"
+	LegacyWritePolicyExistingOnly LegacyWritePolicy = "ExistingOnly"
+	LegacyWritePolicyReject       LegacyWritePolicy = "Reject"
+
 	SpireAttestationMethodTPM       SpireAttestationMethod = "tpm"
 	SpireAttestationMethodJoinToken SpireAttestationMethod = "joinToken"
 	SpireAttestationMethodDSXIMDS   SpireAttestationMethod = "dsxImds"
@@ -36,6 +40,9 @@ const (
 
 // SpireAttestationMethod selects the SPIRE node attestation method pinned at node creation.
 type SpireAttestationMethod string
+
+// LegacyWritePolicy controls whether the legacy REST API can mutate cluster lifecycle state.
+type LegacyWritePolicy string
 
 // DSXImdsConfig configures the external dsx_imds SPIRE node attestor.
 type DSXImdsConfig struct {
@@ -175,6 +182,9 @@ type Config struct {
 	// SupportedInfraProviders is the list of provider payload keys this CWE
 	// deployment advertises for cluster specs.
 	SupportedInfraProviders []string `env:"SUPPORTED_INFRA_PROVIDERS" envSeparator:"," default:"nico"`
+
+	// LegacyWritePolicy gates cluster lifecycle writes through the legacy REST API.
+	LegacyWritePolicy LegacyWritePolicy `env:"LEGACY_WRITE_POLICY" default:"Allow"`
 
 	// RunbooksDir is the optional directory containing config-profile hook scripts.
 	// When omitted, hook execution looks under ProfilesDir/runbooks before falling
@@ -565,6 +575,11 @@ func (c *Config) Validate() error {
 		return err
 	}
 	c.SupportedInfraProviders = supportedInfraProviders
+	switch c.LegacyWritePolicy {
+	case LegacyWritePolicyAllow, LegacyWritePolicyExistingOnly, LegacyWritePolicyReject:
+	default:
+		return fmt.Errorf("LEGACY_WRITE_POLICY must be one of Allow, ExistingOnly, or Reject, got %q", c.LegacyWritePolicy)
+	}
 	if c.NodeAgent.TLSJWT.Enabled {
 		if !c.SpiffeEnabled && !c.NodeAgentExternalMTLSEnabled {
 			return fmt.Errorf("SPIFFE_ENABLED or NODE_AGENT_EXTERNAL_MTLS_ENABLED must be true when NODE_AGENT_TLS_JWT_ENABLED=true")

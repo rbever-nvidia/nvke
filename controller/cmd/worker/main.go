@@ -33,6 +33,7 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/controlplane"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/controlplanenodescheduler"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/dbreconcile/dbwrapper"
+	"github.com/dsx-ai-factory/nke/controller/internal/controllers/nkecluster"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/nodeagentreadiness"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/nodepool"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/nodepoolnodescheduler"
@@ -44,7 +45,6 @@ import (
 	tenantnoderemediation "github.com/dsx-ai-factory/nke/controller/internal/controllers/tenant/noderemediation"
 	tenantnodestatus "github.com/dsx-ai-factory/nke/controller/internal/controllers/tenant/nodestatus"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/tenantaccess"
-	"github.com/dsx-ai-factory/nke/controller/internal/controllers/tenantcluster"
 	"github.com/dsx-ai-factory/nke/controller/internal/controllers/tpmpubhashes"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 	"github.com/dsx-ai-factory/nke/controller/internal/db/migrations"
@@ -58,7 +58,6 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/teleport"
 	"github.com/dsx-ai-factory/nke/controller/internal/temporal"
 	"github.com/dsx-ai-factory/nke/controller/internal/version"
-	enginev1 "github.com/dsx-ai-factory/nke/management-engine/apis/v1"
 )
 
 const (
@@ -222,7 +221,6 @@ func main() {
 		nicov1.AddToScheme,
 		enginev1.AddToScheme,
 		bootstrapv1.AddToScheme,
-		enginev1.AddToScheme,
 	)
 	if err != nil {
 		logger.Error("Failed to create Kubernetes controller manager", "error", err)
@@ -320,13 +318,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	tenantClusterController := tenantcluster.NewController(
+	nkeClusterController := nkecluster.NewController(
 		cfg,
+		dbInstance,
 		k8sControllerManager.GetClient(),
-		logger.With("logger", "tenant-cluster-capi-sync"),
+		logger.With("logger", "nkecluster-capi-sync"),
+		trustDomain,
 	)
-	if err := tenantClusterController.SetupWithManager(k8sControllerManager); err != nil {
-		logger.Error("Failed to set up tenant cluster CAPI sync controller", "error", err)
+	if err := nkeClusterController.SetupWithManager(k8sControllerManager); err != nil {
+		logger.Error("Failed to set up NKECluster CAPI sync controller", "error", err)
 		os.Exit(1)
 	}
 

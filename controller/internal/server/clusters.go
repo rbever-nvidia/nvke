@@ -15,6 +15,9 @@ import (
 
 	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/dsx-ai-factory/nke/controller/api"
 	"github.com/dsx-ai-factory/nke/controller/internal/capi"
@@ -22,6 +25,7 @@ import (
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 	"github.com/dsx-ai-factory/nke/controller/internal/naming"
+	enginev1 "github.com/dsx-ai-factory/nke/management-engine/apis/v1"
 )
 
 const (
@@ -72,12 +76,14 @@ func (e *updateInProgressError) Error() string {
 }
 
 type clusterService struct {
-	logger          *slog.Logger
-	db              db.DB
-	nodePoolService *nodePoolService
-	teleportCfg     config.TeleportConfig
-	oidcAuthEnabled bool
-	providers       providerSupport
+	logger            *slog.Logger
+	db                db.DB
+	k8sClient         ctrlclient.Client
+	nodePoolService   *nodePoolService
+	teleportCfg       config.TeleportConfig
+	oidcAuthEnabled   bool
+	providers         providerSupport
+	legacyWritePolicy config.LegacyWritePolicy
 	// useControlPlaneController mirrors the CWE feature flag
 	// PROVISION_CONTROL_PLANE_WITH_CONTROL_PLANE_CONTROLLER. When true, the
 	// cluster-level controlPlaneConfig is authoritative: it is required on
@@ -96,15 +102,31 @@ func NewClusterService(
 	oidcAuthEnabled bool,
 	supportedInfraProviders []string,
 	useControlPlaneController bool,
+	opts ...ClusterServiceOption,
 ) *clusterService {
-	return &clusterService{
+	svc := &clusterService{
 		logger:                    logger,
 		db:                        database,
 		nodePoolService:           nodePoolService,
 		teleportCfg:               teleportCfg,
 		oidcAuthEnabled:           oidcAuthEnabled,
 		providers:                 newProviderSupport(supportedInfraProviders),
+		legacyWritePolicy:         config.LegacyWritePolicyAllow,
 		useControlPlaneController: useControlPlaneController,
+	}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
+}
+
+// ClusterServiceOption configures the legacy cluster service.
+type ClusterServiceOption func(*clusterService)
+
+// WithLegacyWritePolicy configures legacy REST write gating.
+func WithLegacyWritePolicy(policy config.LegacyWritePolicy) ClusterServiceOption {
+	return func(s *clusterService) {
+		s.legacyWritePolicy = policy
 	}
 }
 
@@ -150,6 +172,12 @@ func (s *clusterService) ListClusters(ctx context.Context, req api.ListClustersR
 }
 
 func (s *clusterService) CreateCluster(ctx context.Context, req api.CreateClusterRequestObject) (api.CreateClusterResponseObject, error) {
+	if s.legacyWritePolicy != config.LegacyWritePolicyAllow {
+		return api.CreateCluster403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse{
+			Message: fmt.Sprintf("legacy cluster create is disabled by LEGACY_WRITE_POLICY=%s; use the NKECluster API", s.legacyWritePolicy),
+		}}, nil
+	}
+
 	network, err := s.preflightCheckCreateClusterRequest(ctx, req.Body)
 	if err != nil {
 		var badRequestErr *badRequestError
@@ -1085,7 +1113,26 @@ func validateOIDCEnableCanStart(cluster db.Cluster) error {
 }
 
 func (s *clusterService) DeleteCluster(ctx context.Context, req api.DeleteClusterRequestObject) (api.DeleteClusterResponseObject, error) {
-	err := s.db.RunInTx(ctx, func(ctx context.Context, tx db.Tx) error {
+	var err error
+	if s.k8sClient != nil {
+		dbCluster, err := s.db.GetCluster(ctx, req.ClusterID)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return api.DeleteCluster404Response{}, nil
+			}
+			return nil, fmt.Errorf("failed to get cluster: %w", err)
+		}
+
+		nkeClusterDeleted, err := s.deleteOwnedNKECluster(ctx, dbCluster)
+		if err != nil {
+			return nil, err
+		}
+		if nkeClusterDeleted {
+			return api.DeleteCluster202Response{}, nil
+		}
+	}
+
+	err = s.db.RunInTx(ctx, func(ctx context.Context, tx db.Tx) error {
 		dbCluster, err := tx.GetCluster(ctx, req.ClusterID)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
@@ -1118,6 +1165,37 @@ func (s *clusterService) DeleteCluster(ctx context.Context, req api.DeleteCluste
 	}
 
 	return api.DeleteCluster202Response{}, nil
+}
+
+func (s *clusterService) deleteOwnedNKECluster(ctx context.Context, dbCluster db.Cluster) (bool, error) {
+	if s.k8sClient == nil {
+		return false, nil
+	}
+
+	var nkeCluster enginev1.NKECluster
+	key := types.NamespacedName{
+		Namespace: constants.NamespaceNKESystem,
+		Name:      dbCluster.Name,
+	}
+	if err := s.k8sClient.Get(ctx, key, &nkeCluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get NKECluster %s: %w", key.String(), err)
+	}
+
+	if nkeCluster.ObjectMeta.DeletionTimestamp != nil {
+		return true, nil
+	}
+
+	if err := s.k8sClient.Delete(ctx, &nkeCluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to delete NKECluster %s: %w", key.String(), err)
+	}
+
+	return true, nil
 }
 
 func APIClusterFromDB(dbCluster *db.Cluster) api.Cluster {
