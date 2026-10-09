@@ -276,6 +276,50 @@ func TestUnit_ReconcileDeletesMachineDeploymentWorkerOnTerminateLabel(t *testing
 	require.True(t, apierrors.IsNotFound(err))
 }
 
+func TestUnit_ReconcileDeletesNKEClusterWorkerOnTerminateLabel(t *testing.T) {
+	clusterID := uuid.New()
+	nodeName := "worker-1"
+	clusterName := "cluster-1"
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-machine",
+			Namespace: constants.NamespaceNKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:                clusterName,
+				"internal.nke.nvidia.com/nkecluster-name": clusterName,
+				"internal.nke.nvidia.com/node-pool-name":  "worker",
+			},
+		},
+		Status: clusterv1.MachineStatus{
+			NodeRef: clusterv1.MachineNodeReference{Name: nodeName},
+		},
+	}
+	kubeNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Labels: map[string]string{
+				constants.LabelKeyNodeLabelTerminate: "replace-node",
+			},
+		},
+	}
+
+	database := &testutil.MockDB{}
+	database.On("GetCluster", mock.Anything, clusterID).Return(db.Cluster{ID: clusterID, Name: clusterName}, nil).Once()
+
+	workflowClient := &recordingWorkflowStarter{}
+	reconciler := newTestReconciler(t, clusterID, database, workflowClient, []runtime.Object{kubeNode}, machine)
+
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	require.NoError(t, err)
+	require.Empty(t, result)
+	database.AssertExpectations(t)
+	require.Empty(t, workflowClient.calls)
+
+	got := &clusterv1.Machine{}
+	err = reconciler.k8sClient.Get(context.Background(), types.NamespacedName{Namespace: constants.NamespaceNKESystem, Name: machine.Name}, got)
+	require.True(t, apierrors.IsNotFound(err))
+}
+
 func TestUnit_ReconcileAnnotatesMachineDeploymentWorkerOnRebootLabel(t *testing.T) {
 	clusterID := uuid.New()
 	nodePoolID := uuid.New()

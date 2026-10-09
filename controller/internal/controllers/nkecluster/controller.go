@@ -568,6 +568,7 @@ func (c *Controller) applyNodePool(
 	version := normalizeVersion(kubernetesVersion)
 	labels := machineLabels(cluster.Name, string(pool.Name))
 
+	// FIXME: POC: Switch on infrastructure provider
 	infraTemplate, err := c.buildNicoMachineTemplate(cluster, pool, machineClass, machineImage, name, labels)
 	if err != nil {
 		return err

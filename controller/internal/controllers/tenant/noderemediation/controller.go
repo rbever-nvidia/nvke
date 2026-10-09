@@ -162,6 +162,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		return reconcile.Result{}, fmt.Errorf("getting Machine for tenant Node %s: %w", request.Name, err)
 	}
 
+	// Direct NKECluster workers have no db.NodePool. They use the MachineDeployment
+	// remediation path, which deletes the Machine when the tenant Node is authorized.
+	if nkeClusterWorker(machine) {
+		return r.remediateMachineDeploymentWorker(ctx, kubeNode, machine)
+	}
+
 	nodePool, err := r.nodePoolForMachine(ctx, machine)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("getting node pool for Machine %s/%s: %w", machine.Namespace, machine.Name, err)
@@ -204,6 +210,12 @@ func (r *Reconciler) machineForTenantNode(ctx context.Context, nodeName string) 
 	}
 
 	return nil, fmt.Errorf("no Machine found for tenant Node %s in cluster %s", nodeName, cluster.Name)
+}
+
+// FIXME: POC: share the NKECluster label keys instead of hardcoding them here.
+func nkeClusterWorker(machine *clusterv1.Machine) bool {
+	labels := machine.GetLabels()
+	return labels["internal.nke.nvidia.com/nkecluster-name"] != "" && labels["internal.nke.nvidia.com/node-pool-name"] != ""
 }
 
 func (r *Reconciler) nodePoolForMachine(ctx context.Context, machine *clusterv1.Machine) (db.NodePool, error) {
