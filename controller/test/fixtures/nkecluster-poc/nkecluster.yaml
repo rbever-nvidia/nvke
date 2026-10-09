@@ -1,5 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Local nico-sim container site from controller/nico-sim/internal/seed/default-seed.yaml.
+# That site has one instance type, nico-container-node, and one subnet. It has no VPC prefix.
+# The nico-vms classes below are the VM site sizes and stay available for that backend.
 ---
 apiVersion: internal.nke.nvidia.com/v1
 kind: MachineClass
@@ -62,15 +66,27 @@ spec:
     kubeReservedMemory: 2Gi
 ---
 apiVersion: internal.nke.nvidia.com/v1
+kind: MachineClass
+metadata:
+  name: nico-container-node
+spec:
+  provider: nico
+  nico:
+    instanceTypeID: 00000000-0000-0000-0000-000000000005
+  kubelet:
+    systemReservedMemory: 512Mi
+    kubeReservedMemory: 256Mi
+---
+apiVersion: internal.nke.nvidia.com/v1
 kind: ControlPlaneClass
 metadata:
-  name: capi-nico-poc
+  name: capi-nico-containers-poc
 spec:
   replicas:
-    default: 3
+    default: 1
     maxSurge: 1
   machine:
-    machineClass: nico-vms-cpu4-mem6gb-disk60gb
+    machineClass: nico-container-node
     spireAttestationMethod: tpm
     infrastructureTemplatePreferences:
       - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
@@ -78,9 +94,11 @@ spec:
         spec:
           template:
             spec:
-              vpcID: a1b2c3d4-0002-4000-8000-000000000001
+              vpcID: 00000000-0000-0000-0000-000000000002
+              sshKeyGroupIDs:
+                - 00000000-0000-0000-0000-000000000004
               interfaces:
-                - vpcPrefixID: a1b2c3d4-0004-4000-8000-000000000001
+                - subnetID: 00000000-0000-0000-0000-000000000003
               cloudInitInjectHostname: true
   bootstrap:
     preKubeadmCommands: []
@@ -89,7 +107,7 @@ spec:
 apiVersion: internal.nke.nvidia.com/v1
 kind: NKECluster
 metadata:
-  name: nico-vms-poc
+  name: nico-containers-poc
   namespace: nke-system
 spec:
   apiServerAccess:
@@ -105,14 +123,14 @@ spec:
     serviceDomain: cluster.local
   release:
     channel:
-      name: nke-nico-vms-24.04-amd64-fde-live-poc
+      name: nke-local-dev-kindest-arm64
       version: "1.34.2"
-  controlPlaneClass: capi-nico-poc
+  controlPlaneClass: capi-nico-containers-poc
   network:
-    vpcID: a1b2c3d4-0002-4000-8000-000000000001
+    vpcID: 00000000-0000-0000-0000-000000000002
   nodePools:
     - name: worker
-      machineClass: nico-vms-cpu4-mem6gb-disk60gb
+      machineClass: nico-container-node
       replicas: 1
-      vpcPrefixID: a1b2c3d4-0004-4000-8000-000000000001
-      nodeProfile: nke-nico-vms-24.04-amd64-fde-live-poc:v1
+      vpcSubnetID: 00000000-0000-0000-0000-000000000003
+      nodeProfile: nke-local-dev-kindest-arm64:v1

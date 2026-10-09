@@ -290,10 +290,18 @@ func (s *Service) startInstanceContainer(ctx context.Context, containerID string
 	if _, err := s.runDocker(ctx, "start", containerID); err != nil {
 		return nil, fmt.Errorf("start node container: %w", err)
 	}
-	if err := s.applyCloudConfig(ctx, containerID, req.GetUserData()); err != nil {
+	instance, err := s.loadInstance(ctx, containerID)
+	if err != nil {
 		return nil, err
 	}
-	return s.loadInstance(ctx, containerID)
+	// Cloud-config runs after create returns, as it would on a booting machine.
+	// Its commands include kubeadm, which can outlast the caller's request timeout.
+	go func() {
+		if err := s.applyCloudConfig(context.WithoutCancel(ctx), containerID, req.GetUserData()); err != nil {
+			s.logger.Error("apply cloud-config to mock instance container", "instance_id", instance.GetId(), "container_id", containerID, "err", err)
+		}
+	}()
+	return instance, nil
 }
 
 func (s *Service) findInstanceByName(ctx context.Context, name string) (*nicosdk.Instance, error) {

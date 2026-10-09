@@ -19,6 +19,9 @@ ARG KINDEST_NODE_TAG=v1.34.8
 ARG CAPD_BASE_PLATFORM=linux/arm64
 # build-image.sh points this at the Docker Hub mirror when one is configured.
 ARG KINDEST_NODE_IMAGE=docker.io/kindest/node
+
+FROM --platform=${CAPD_BASE_PLATFORM} ghcr.io/spiffe/k8s-spiffe-workload-jwt-exec-auth:0.3.0@sha256:6402624276b66ef7a733e126488397c9cf33c6706ee1f52a9c7ffad2a540aa7c AS spiffe-jwt-exec-auth
+
 FROM --platform=${CAPD_BASE_PLATFORM} ${KINDEST_NODE_IMAGE}:${KINDEST_NODE_TAG}
 
 ARG NODE_AGENT_VERSION=v0.1.29
@@ -167,6 +170,10 @@ RUN set -eux; \
     ./install.sh || true; \
     test -x /usr/local/bin/spire-agent || test -x /opt/spire/bin/spire-agent; \
     cd /tmp && rm -rf /tmp/spire-agent-src /tmp/spire-agent-bundle
+
+# CABPK worker join kubeconfigs authenticate with this exec plugin. NICo VMs
+# download it at bootstrap from carbide-pxe.forge, which containers cannot resolve.
+COPY --from=spiffe-jwt-exec-auth /ko-app/cmd /opt/spiffe/bin/k8s-spiffe-workload-jwt-exec-auth
 
 # DSX IMDS is opt-in for local CAPD images. Install it whenever supplied so a
 # TPM-capable image can also bootstrap new dsxImds nodes. Its checksum comes
