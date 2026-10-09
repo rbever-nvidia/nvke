@@ -111,8 +111,7 @@ func (c *Controller) reconcileMachineDeployment(ctx context.Context, nodePool db
 	// Unlike the legacy path, this reconciler starts at most one recycle per
 	// iteration. A positive iterationRecycleCount only authorizes that recycle;
 	// subsequent reconciliations observe its effect before starting another.
-	availableDeficit := max(nodePool.DesiredCount-classification.availableCount, 0)
-	iterationRecycleCount := max(nodePool.RecycleBudget-availableDeficit, 0)
+	iterationRecycleCount := recycleAllowance(nodePool.DesiredCount, classification.availableCount, nodePool.RecycleBudget)
 	if iterationRecycleCount == 0 {
 		return result, nil
 	}

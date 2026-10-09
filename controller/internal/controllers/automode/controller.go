@@ -54,7 +54,7 @@ func NewController(
 
 // SetupWithManager wires the controller into controller-runtime with DB and CAPI sources.
 func (c *Controller) SetupWithManager(mgr manager.Manager) error {
-	return dbreconcile.AddController(mgr, dbreconcile.Controller{
+	if err := dbreconcile.AddController(mgr, dbreconcile.Controller{
 		Name:       "auto-mode-controller",
 		Reconciler: c,
 		Sources: []dbreconcile.Source{
@@ -70,7 +70,10 @@ func (c *Controller) SetupWithManager(mgr manager.Manager) error {
 			}}},
 			Map: nodePoolKeyForMachine,
 		}},
-	})
+	}); err != nil {
+		return err
+	}
+	return c.setupNKEClusterAutoMode(mgr)
 }
 
 func nodePoolKeysForNodeSet(_ context.Context, nodeSet db.NodeSet) ([]dbreconcile.Key, error) {

@@ -131,6 +131,12 @@ spec:
   nodePools:
     - name: worker
       machineClass: nico-container-node
-      replicas: 1
+      replicas: 2
       vpcSubnetID: 00000000-0000-0000-0000-000000000003
       nodeProfile: nke-local-dev-kindest-arm64:v1
+      rollout:
+        strategy:
+          type: RollingUpdate
+          disruption:
+            budgets:
+              - nodes: "1"

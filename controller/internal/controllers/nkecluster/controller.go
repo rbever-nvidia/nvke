@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
@@ -28,13 +29,14 @@ import (
 
 	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 
+	enginev1 "github.com/dsx-ai-factory/nke/management-engine/apis/v1"
+
 	capibuild "github.com/dsx-ai-factory/nke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nke/controller/internal/config"
 	"github.com/dsx-ai-factory/nke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nke/controller/internal/db"
 	"github.com/dsx-ai-factory/nke/controller/internal/kubeadmconfig"
 	"github.com/dsx-ai-factory/nke/controller/internal/machinerelease"
-	enginev1 "github.com/dsx-ai-factory/nke/management-engine/apis/v1"
 )
 
 const (
@@ -59,6 +61,12 @@ const (
 
 	pocSpireAgentPathSelectorDropInPath    = "/etc/systemd/system/spire-agent.service.d/10-workload-path.conf"
 	pocSpireAgentPathSelectorDropInContent = "[Service]\nAmbientCapabilities=CAP_SYS_PTRACE\n"
+
+	reasonReady                     = "Ready"
+	reasonWaitingForMachineClass    = "WaitingForMachineClass"
+	reasonWaitingForNodePoolRelease = "WaitingForNodePoolRelease"
+
+	messageNodePoolApplied = "Node pool is applied"
 )
 
 // Controller reconciles the tenant-facing NKECluster API directly into CAPI resources.
@@ -148,6 +156,9 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("applying compatibility CAPI cluster scaffold: %w", err)
 	}
 	if len(cluster.Spec.NodePools) == 0 {
+		if err := c.markApplied(ctx, &cluster); err != nil {
+			return reconcile.Result{}, err
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -157,14 +168,17 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 		if !found {
-			return reconcile.Result{RequeueAfter: time.Minute}, nil
+			message := fmt.Sprintf("MachineClass %s for node pool %s is not installed", pool.MachineClass, pool.Name)
+			return c.requeueWaiting(ctx, &cluster, reasonWaitingForMachineClass, message, string(pool.Name))
 		}
 		nodePoolRelease, machineImage, found, err := c.resolveNodePoolRelease(ctx, cluster, pool)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		if !found {
-			return reconcile.Result{RequeueAfter: time.Minute}, nil
+			releaseName := strings.SplitN(string(pool.NodeProfile), ":", 2)[0]
+			message := fmt.Sprintf("NodePoolRelease %s for node pool %s nodeProfile %s is not installed", releaseName, pool.Name, pool.NodeProfile)
+			return c.requeueWaiting(ctx, &cluster, reasonWaitingForNodePoolRelease, message, string(pool.Name))
 		}
 		workerVersion, err := kubernetesVersionFromRelease(
 			nodePoolRelease,
@@ -176,8 +190,102 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		if err := c.applyNodePool(ctx, cluster, pool, machineClass, workerVersion, nodePoolRelease, machineImage); err != nil {
 			return reconcile.Result{}, fmt.Errorf("applying node pool %s: %w", pool.Name, err)
 		}
+		if err := c.markPoolApplied(ctx, &cluster, string(pool.Name)); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	if err := c.markApplied(ctx, &cluster); err != nil {
+		return reconcile.Result{}, err
 	}
 	return reconcile.Result{}, nil
+}
+
+func (c *Controller) requeueWaiting(ctx context.Context, cluster *enginev1.NKECluster, reason, message, poolName string) (reconcile.Result, error) {
+	if err := c.markWaiting(ctx, cluster, reason, message, poolName); err != nil {
+		return reconcile.Result{}, err
+	}
+	return reconcile.Result{RequeueAfter: time.Minute}, nil
+}
+
+func (c *Controller) markWaiting(ctx context.Context, cluster *enginev1.NKECluster, reason, message, poolName string) error {
+	condition := readyCondition(cluster.Generation, metav1.ConditionFalse, reason, message)
+	return c.patchStatus(ctx, cluster, func() {
+		setNodePoolReadyCondition(cluster, poolName, condition, false)
+	})
+}
+
+func (c *Controller) markPoolApplied(ctx context.Context, cluster *enginev1.NKECluster, poolName string) error {
+	condition := readyCondition(cluster.Generation, metav1.ConditionTrue, reasonReady, messageNodePoolApplied)
+	return c.patchStatus(ctx, cluster, func() {
+		setNodePoolReadyCondition(cluster, poolName, condition, true)
+	})
+}
+
+func (c *Controller) markApplied(ctx context.Context, cluster *enginev1.NKECluster) error {
+	return c.patchStatus(ctx, cluster, func() {
+		cluster.Status.NodePools = appliedNodePoolStatus(cluster, readyCondition(cluster.Generation, metav1.ConditionTrue, reasonReady, messageNodePoolApplied))
+	})
+}
+
+func (c *Controller) patchStatus(ctx context.Context, cluster *enginev1.NKECluster, mutate func()) error {
+	base := cluster.DeepCopy()
+	mutate()
+	if err := c.k8s.Status().Patch(ctx, cluster, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("updating NKECluster %s status: %w", cluster.Name, err)
+	}
+	return nil
+}
+
+func readyCondition(generation int64, status metav1.ConditionStatus, reason, message string) metav1.Condition {
+	return metav1.Condition{
+		Type:               enginev1.ReadyCondition,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: generation,
+	}
+}
+
+func appliedNodePoolStatus(cluster *enginev1.NKECluster, condition metav1.Condition) []enginev1.NodePoolStatus {
+	if len(cluster.Spec.NodePools) == 0 {
+		return nil
+	}
+	pools := make([]enginev1.NodePoolStatus, 0, len(cluster.Spec.NodePools))
+	for _, pool := range cluster.Spec.NodePools {
+		status := existingNodePoolStatus(cluster, string(pool.Name))
+		meta.SetStatusCondition(&status.Conditions, condition)
+		status.ObservedGeneration = cluster.Generation
+		pools = append(pools, status)
+	}
+	return pools
+}
+
+func setNodePoolReadyCondition(cluster *enginev1.NKECluster, poolName string, condition metav1.Condition, applied bool) {
+	for i := range cluster.Status.NodePools {
+		if string(cluster.Status.NodePools[i].Name) != poolName {
+			continue
+		}
+		meta.SetStatusCondition(&cluster.Status.NodePools[i].Conditions, condition)
+		if applied {
+			cluster.Status.NodePools[i].ObservedGeneration = cluster.Generation
+		}
+		return
+	}
+	status := enginev1.NodePoolStatus{Name: enginev1.ResourceName(poolName)}
+	meta.SetStatusCondition(&status.Conditions, condition)
+	if applied {
+		status.ObservedGeneration = cluster.Generation
+	}
+	cluster.Status.NodePools = append(cluster.Status.NodePools, status)
+}
+
+func existingNodePoolStatus(cluster *enginev1.NKECluster, poolName string) enginev1.NodePoolStatus {
+	for _, status := range cluster.Status.NodePools {
+		if string(status.Name) == poolName {
+			return status
+		}
+	}
+	return enginev1.NodePoolStatus{Name: enginev1.ResourceName(poolName)}
 }
 
 func (c *Controller) reconcileDelete(ctx context.Context, cluster enginev1.NKECluster) (reconcile.Result, error) {
@@ -320,7 +428,7 @@ func (c *Controller) getNodePoolMachineClass(ctx context.Context, cluster engine
 	return machineClass, found, err
 }
 
-func (c *Controller) getMachineClass(ctx context.Context, name string, clusterName string) (enginev1.MachineClass, bool, error) {
+func (c *Controller) getMachineClass(ctx context.Context, name, clusterName string) (enginev1.MachineClass, bool, error) {
 	var machineClass enginev1.MachineClass
 	key := types.NamespacedName{Name: name}
 	if err := c.k8s.Get(ctx, key, &machineClass); err != nil {

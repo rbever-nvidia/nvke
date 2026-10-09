@@ -8,13 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	capiconditions "sigs.k8s.io/cluster-api/util/conditions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	enginev1 "github.com/dsx-ai-factory/nke/management-engine/apis/v1"
 
 	"github.com/dsx-ai-factory/nke/controller/api"
 	"github.com/dsx-ai-factory/nke/controller/internal/capi"
@@ -167,14 +172,26 @@ func (s *nodePoolService) listNKEClusterMachineDeploymentNodePools(ctx context.C
 		machineSetsByDeployment[name] = append(machineSetsByDeployment[name], machineSets.Items[i])
 	}
 
+	nkeClusters := &enginev1.NKEClusterList{}
+	if err := s.k8sClient.List(ctx, nkeClusters, ctrlclient.InNamespace(constants.NamespaceNKESystem)); err != nil {
+		return nil, fmt.Errorf("listing NKEClusters for node pool status: %w", err)
+	}
+
 	apiNodePools := make([]api.NodePool, 0, len(machineDeployments.Items))
 	for i := range machineDeployments.Items {
 		md := &machineDeployments.Items[i]
-		clusterID, ok := clusterIDsByName[md.Labels[clusterv1.ClusterNameLabel]]
+		clusterName := md.Labels[clusterv1.ClusterNameLabel]
+		clusterID, ok := clusterIDsByName[clusterName]
 		if !ok {
 			continue
 		}
-		nodePool := apiNodePoolFromMachineDeployment(md, clusterID, currentMachineSetID(machineSetsByDeployment[md.Name]))
+		poolName := md.Labels[labelNKEClusterPool]
+		waitingCondition := nkeClusterNodePoolWaitingCondition(nkeClusters.Items, clusterName, poolName)
+		recycleBudget, err := nkeClusterRecycleBudget(nkeClusters.Items, clusterName, poolName)
+		if err != nil {
+			return nil, err
+		}
+		nodePool := apiNodePoolFromMachineDeployment(md, clusterID, currentMachineSetID(machineSetsByDeployment[md.Name]), waitingCondition, recycleBudget)
 		if nodePool != nil {
 			apiNodePools = append(apiNodePools, *nodePool)
 		}
@@ -954,7 +971,13 @@ func apiNodePoolFromDB(dbNodePool *db.NodePool) api.NodePool {
 	}
 }
 
-func apiNodePoolFromMachineDeployment(md *clusterv1.MachineDeployment, clusterID uuid.UUID, currentNodeSetID *uuid.UUID) *api.NodePool {
+func apiNodePoolFromMachineDeployment(
+	md *clusterv1.MachineDeployment,
+	clusterID uuid.UUID,
+	currentNodeSetID *uuid.UUID,
+	waitingCondition *metav1.Condition,
+	recycleBudget int,
+) *api.NodePool {
 	if md == nil {
 		return nil
 	}
@@ -982,6 +1005,12 @@ func apiNodePoolFromMachineDeployment(md *clusterv1.MachineDeployment, clusterID
 		availableCondition.Status == metav1.ConditionTrue
 	provisioning := !deleting && !provisioned
 	message := machineDeploymentNodePoolProgressMessage(md, actual, available, desired)
+	if waitingCondition != nil {
+		provisioned = false
+		provisioning = !deleting
+		message = conditionMessage(waitingCondition)
+		at = waitingCondition.LastTransitionTime.Time
+	}
 	provisioningCondition := db.Condition{
 		Status:             db.ConditionStatusFromBool(provisioning),
 		Message:            message,
@@ -1009,7 +1038,7 @@ func apiNodePoolFromMachineDeployment(md *clusterv1.MachineDeployment, clusterID
 		AutoProvisionDisabled:       false,
 		AutoModeDisabled:            false,
 		ProvisioningMonitorDisabled: false,
-		RecycleBudget:               0,
+		RecycleBudget:               recycleBudget,
 		CurrentNodeSetID:            currentNodeSetID,
 		TeleportEnabled:             &teleportEnabled,
 		Conditions: api.NodePoolConditions{
@@ -1018,6 +1047,98 @@ func apiNodePoolFromMachineDeployment(md *clusterv1.MachineDeployment, clusterID
 			Deleting:     apiConditionFromDB(deletingCondition),
 		},
 	}
+}
+
+// FIXME: POC: This is a lot of code to project a nke shaped API - We should just update it.
+func nkeClusterRecycleBudget(clusters []enginev1.NKECluster, clusterName, poolName string) (int, error) {
+	cluster := nkeClusterByName(clusters, clusterName)
+	if cluster == nil {
+		return 0, nil
+	}
+	for i := range cluster.Spec.NodePools {
+		pool := &cluster.Spec.NodePools[i]
+		if string(pool.Name) != poolName {
+			continue
+		}
+		budget, err := disruptionBudget(pool.Rollout, ptr.Deref(pool.Replicas, 0))
+		if err != nil {
+			return 0, fmt.Errorf("reading rollout budget for NKECluster %s node pool %s: %w", clusterName, poolName, err)
+		}
+		return budget, nil
+	}
+	return 0, nil
+}
+
+func disruptionBudget(rollout *enginev1.Rollout, replicas int32) (int, error) {
+	if rollout == nil {
+		return 0, nil
+	}
+	found := false
+	limit := 0
+	for _, budget := range rollout.Strategy.Disruption.Budgets {
+		if budget.Schedule != "" {
+			continue
+		}
+		nodes, err := disruptionBudgetNodes(budget.Nodes, replicas)
+		if err != nil {
+			return 0, err
+		}
+		if !found || nodes < limit {
+			limit = nodes
+			found = true
+		}
+	}
+	if !found {
+		return 0, nil
+	}
+	return limit, nil
+}
+
+func disruptionBudgetNodes(raw string, replicas int32) (int, error) {
+	value := strings.TrimSpace(raw)
+	if strings.HasSuffix(value, "%") {
+		percent, err := strconv.Atoi(strings.TrimSuffix(value, "%"))
+		if err != nil {
+			return 0, fmt.Errorf("parsing disruption budget %q: %w", raw, err)
+		}
+		return int((int64(replicas)*int64(percent) + 99) / 100), nil
+	}
+	nodes, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parsing disruption budget %q: %w", raw, err)
+	}
+	return nodes, nil
+}
+
+func nkeClusterByName(clusters []enginev1.NKECluster, name string) *enginev1.NKECluster {
+	for i := range clusters {
+		if clusters[i].Name == name {
+			return &clusters[i]
+		}
+	}
+	return nil
+}
+
+func nkeClusterNodePoolWaitingCondition(clusters []enginev1.NKECluster, clusterName, poolName string) *metav1.Condition {
+	for i := range clusters {
+		cluster := &clusters[i]
+		if cluster.Name != clusterName {
+			continue
+		}
+		for j := range cluster.Status.NodePools {
+			pool := &cluster.Status.NodePools[j]
+			if string(pool.Name) != poolName {
+				continue
+			}
+			condition := meta.FindStatusCondition(pool.Conditions, enginev1.ReadyCondition)
+			if condition != nil && condition.ObservedGeneration == cluster.Generation && condition.Status != metav1.ConditionTrue {
+				return condition
+			}
+			return nil
+		}
+		return nil
+	}
+	return nil
 }
 
 func machineDeploymentNodePoolProgressMessage(md *clusterv1.MachineDeployment, actual, available, desired int) string {
