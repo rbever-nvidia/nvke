@@ -40,7 +40,8 @@ const (
 // SpireAttestationMethod selects the SPIRE node attestation method pinned at node creation.
 type SpireAttestationMethod string
 
-// DSXImdsConfig configures the external dsx_imds SPIRE node attestor.
+// DSXImdsConfig configures the external dsx_imds SPIRE node attestor and, for
+// the direct IMDS join POC, the tenant kube-apiserver JWT authenticator.
 type DSXImdsConfig struct {
 	// Endpoint is the metadata endpoint used by the external node attestor.
 	Endpoint string `controllerconfig:"nodeAgent.dsxImds.endpoint"`
@@ -49,9 +50,19 @@ type DSXImdsConfig struct {
 	// empty value keeps the image-owned environment expansion.
 	PluginChecksum string `controllerconfig:"nodeAgent.dsxImds.pluginChecksum"`
 
-	// OperatorTenant is the tenant segment in dsx_imds-attested SPIRE agent IDs.
-	// It must match the DSX Identity operator tenant.
+	// OperatorTenant is the tenant segment in dsx_imds-attested identities. It
+	// must match the DSX Identity operator tenant.
 	OperatorTenant string `controllerconfig:"nodeAgent.dsxImds.operatorTenant"`
+
+	// IssuerURL is the DSX issuer in IMDS identity JWTs trusted by tenant kube-apiservers.
+	IssuerURL string `controllerconfig:"nodeAgent.dsxImds.issuerURL"`
+
+	// DiscoveryURL optionally overrides the issuer discovery endpoint for tenant kube-apiservers.
+	DiscoveryURL string `controllerconfig:"nodeAgent.dsxImds.discoveryURL"`
+
+	// DiscoveryCA is an optional PEM bundle tenant kube-apiservers use to verify
+	// the issuer discovery and JWKS endpoints.
+	DiscoveryCA string `controllerconfig:"nodeAgent.dsxImds.discoveryCA"`
 }
 
 // TLSJWTConfig configures TLS/JWT authentication for controller calls to node agents.

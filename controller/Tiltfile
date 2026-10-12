@@ -140,7 +140,9 @@ if "capd" in _provider_names or "nico" in _provider_names or "nico-vm" in _provi
 if not _supported_infra_providers:
     _supported_infra_providers.append("nico")
 
-CONTROLLER_NAMESPACE = "nke-controller"
+CONTROLLER_NAMESPACE = cfg.get("controller_namespace", "nke-controller")
+CONTROLLER_RELEASE_NAME = cfg.get("controller_release_name", "nke-controller")
+CONTROLLER_DEPLOYMENT_NAME = cfg.get("controller_deployment_name", CONTROLLER_RELEASE_NAME)
 TEMPORAL_NAMESPACE = "temporal"
 POSTGRES_NAMESPACE = "postgres"
 SPIRE_NAMESPACE = "spire-server"
@@ -467,11 +469,17 @@ _preflight_script += """
         echo "helm is required in PATH" >&2
         exit 1
       }
+      controller_release_name="%s"
+      controller_namespace="%s"
       if helm status cwe -n cloud-workflow-engine >/dev/null 2>&1; then
+        if [ "${controller_release_name}" = "cwe" ] && [ "${controller_namespace}" = "cloud-workflow-engine" ]; then
+          echo "Using existing controller Helm release cwe in namespace cloud-workflow-engine"
+        else
         echo "This cluster runs the controller as Helm release cwe in namespace cloud-workflow-engine. Tilt now installs it as nke-controller in nke-controller and cannot take over the old install. Recreate the cluster: make kind-down, then make capd-up." >&2
         exit 1
+        fi
       fi
-"""
+""" % (CONTROLLER_RELEASE_NAME, CONTROLLER_NAMESPACE)
 if not CWE_IMAGE:
     _preflight_script += """
       command -v docker >/dev/null || {
@@ -1071,6 +1079,21 @@ _cwe_chart_flags = [
     "--timeout", "10m",
 ] + _all_cwe_chart_flags
 
+if CONTROLLER_RELEASE_NAME == "cwe" and CONTROLLER_NAMESPACE == "cloud-workflow-engine":
+    _cwe_chart_flags += [
+        "--set-string", "fullnameOverride=cloud-workflow-engine",
+        "--set-string", "nameOverride=cloud-workflow-engine",
+        "--set-string", "namespaceOverride=cloud-workflow-engine",
+        "--set-string", "serviceAccount.name=cloud-workflow-engine",
+        "--set-string", "appDb.dbName=cloud-workflow",
+        "--set-string", "temporal.cloudWorkflow.namespace=cloud-workflow-engine",
+        "--set-string", "temporal.cloudWorkflow.queue=cloud-workflow-engine-tasks",
+        "--set-string", "identity.fieldManagerName=cloud-workflow-engine",
+        "--set-string", "identity.fieldManagerRebootMachineName=cloud-workflow-engine-reboot-machine",
+        "--set-string", "identity.fieldManagerMachineHealthIssueName=cloud-workflow-engine-machine-health-issue",
+        "--set-string", "identity.managedByLabelValue=cloud-workflow-engine",
+    ]
+
 if _cwe_spire_attestation_method != "":
     _cwe_chart_flags += [
         "--set-string", "nodeAgent.spireAttestationMethod=%s" % _cwe_spire_attestation_method,
@@ -1274,7 +1297,7 @@ helm_resource(
     "cwe",
     chart="deploy/charts/controller",
     labels=["3-cwe"],
-    release_name="nke-controller",
+    release_name=CONTROLLER_RELEASE_NAME,
     namespace=CONTROLLER_NAMESPACE,
     image_deps=_cwe_image_deps,
     image_keys=_cwe_image_keys,
@@ -1354,8 +1377,8 @@ cmd_button(
     "3-restart-cwe",
     argv=["bash", "-c", """
       set -euo pipefail
-      kubectl -n """ + CONTROLLER_NAMESPACE + """ rollout restart deployment/nke-controller
-      kubectl -n """ + CONTROLLER_NAMESPACE + """ rollout status deployment/nke-controller --timeout=180s
+      kubectl -n """ + CONTROLLER_NAMESPACE + """ rollout restart deployment/""" + CONTROLLER_DEPLOYMENT_NAME + """
+      kubectl -n """ + CONTROLLER_NAMESPACE + """ rollout status deployment/""" + CONTROLLER_DEPLOYMENT_NAME + """ --timeout=180s
     """],
     resource="cwe",
     icon_name="restart_alt",

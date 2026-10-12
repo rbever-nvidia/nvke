@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capisecret "sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -47,7 +48,25 @@ import (
 )
 
 const (
-	testKubeconfig = "kubeconfig-data"
+	// testKubeconfig is a parseable admin.conf. publish() reads its server and CA
+	// to satisfy the CABPK bootstrap contract, so an opaque placeholder no longer works.
+	testKubeconfig = `apiVersion: v1
+kind: Config
+clusters:
+- name: cluster
+  cluster:
+    server: https://198.51.100.11:6443
+    certificate-authority-data: dGVzdC1jYQ==
+contexts:
+- name: ctx
+  context:
+    cluster: cluster
+    user: admin
+current-context: ctx
+users:
+- name: admin
+  user: {}
+`
 
 	// testAdminConf is a minimal but parseable admin.conf: the OIDC path loads it
 	// to extract the CA (base64 "test-ca") and server URL. testServer is that URL.
@@ -202,9 +221,9 @@ func TestController_Reconcile(t *testing.T) {
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(activeCluster.Name)).Return([]db.Cluster{activeCluster}, nil).Once()
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(deletingCluster.Name)).Return([]db.Cluster{deletingCluster}, nil).Once()
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(notReadyCluster.Name)).Return([]db.Cluster{notReadyCluster}, nil).Once()
-	// Active is read by the mode refresh, admin Secret upsert, and controller kubeconfig
-	// Secret upsert.
-	mockDB.On("GetCluster", mock.Anything, activeCluster.ID).Return(activeCluster, nil).Times(3)
+	// Active is read by the mode refresh, admin Secret upsert, controller kubeconfig
+	// Secret upsert, and the CABPK cluster CA Secret upsert.
+	mockDB.On("GetCluster", mock.Anything, activeCluster.ID).Return(activeCluster, nil).Times(4)
 	mockDB.On("ListNodes", mock.Anything, mock.MatchedBy(func(f db.NodeFilters) bool {
 		return f.ClusterID != nil && *f.ClusterID == activeCluster.ID
 	})).Return([]db.Node{joinedCPNode(activeNodeID, activeCluster.ID)}, nil)
@@ -428,9 +447,9 @@ func TestController_ReconcileOIDC(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(oidcCluster.Name)).Return([]db.Cluster{oidcCluster}, nil).Once()
-	// The mode refresh, admin Secret upsert, SPIRE kubeconfig upsert, and
-	// trust-bundle upsert each re-read the row.
-	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(4)
+	// The mode refresh, admin Secret upsert, SPIRE kubeconfig upsert,
+	// trust-bundle upsert, and CABPK cluster CA Secret upsert each re-read the row.
+	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.MatchedBy(func(f db.NodeFilters) bool {
 		return f.ClusterID != nil && *f.ClusterID == oidcID
 	})).Return([]db.Node{joinedCPNode(oidcNodeID, oidcID)}, nil)
@@ -532,8 +551,8 @@ func TestController_ReconcileMixed(t *testing.T) {
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(plainCluster.Name)).Return([]db.Cluster{plainCluster}, nil).Once()
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(oidcCluster.Name)).Return([]db.Cluster{oidcCluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, plainID).Return(plainCluster, nil).Times(3)
-	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(4)
+	mockDB.On("GetCluster", mock.Anything, plainID).Return(plainCluster, nil).Times(4)
+	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.MatchedBy(func(f db.NodeFilters) bool {
 		return f.ClusterID != nil && *f.ClusterID == plainID
 	})).Return([]db.Node{joinedCPNode(plainNodeID, plainID)}, nil)
@@ -861,7 +880,7 @@ func TestController_PublishesOIDCWhenTenantAccessDisabled(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(oidcCluster.Name)).Return([]db.Cluster{oidcCluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(4)
+	mockDB.On("GetCluster", mock.Anything, oidcID).Return(oidcCluster, nil).Times(5)
 	mockDB.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{joinedCPNode(oidcNodeID, oidcID)}, nil)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(nvkeRBACConfigMap(), capiClusterFixture(oidcCluster)).Build()
@@ -893,7 +912,7 @@ func TestController_PublishesAdminWhenTenantAccessDisabled(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(cluster.Name)).Return([]db.Cluster{cluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(3)
+	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(4)
 	mockDB.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{joinedCPNode(nodeID, clusterID)}, nil)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
@@ -948,7 +967,7 @@ func TestController_PublishesAdminForCAPIWhenFlagsOff(t *testing.T) {
 
 	mockDB := &testutil.MockDB{}
 	mockDB.On("ListClusters", mock.Anything, clusterNameFilter(cluster.Name)).Return([]db.Cluster{cluster}, nil).Once()
-	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(3)
+	mockDB.On("GetCluster", mock.Anything, clusterID).Return(cluster, nil).Times(4)
 	mockDB.On("ListNodes", mock.Anything, mock.Anything).Return([]db.Node{joinedCPNode(nodeID, clusterID)}, nil)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
@@ -1035,6 +1054,38 @@ func TestPublish_ReturnsSPIREAndBreakglassErrors(t *testing.T) {
 	require.ErrorContains(t, err, "nke-rbac ConfigMap not found")
 	require.ErrorContains(t, err, "issuing breakglass kubeconfig for cluster oidc")
 	require.ErrorContains(t, err, "denied by kubectl certificate deny")
+}
+
+func TestPublish_PublishesCABPKBootstrapContract(t *testing.T) {
+	ctx := context.Background()
+	cluster := db.Cluster{ID: uuid.New(), Name: "capi-contract"}
+	adminConf := kubeconfigWithParseableCA(t)
+
+	mockDB := &testutil.MockDB{}
+	mockDB.On("GetCluster", mock.Anything, cluster.ID).Return(cluster, nil)
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(capiClusterFixture(cluster)).Build()
+	c := newPublishTestController(mockDB, k8sClient)
+
+	require.NoError(t, c.publish(ctx, cluster, adminConf))
+
+	gotCluster := &clusterv1.Cluster{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: cluster.Name, Namespace: SecretsNamespace}, gotCluster))
+	assert.Equal(t, clusterv1.APIEndpoint{Host: "198.51.100.10", Port: 6443}, gotCluster.Spec.ControlPlaneEndpoint)
+
+	parsed, err := clientcmd.Load(adminConf)
+	require.NoError(t, err)
+	wantCA, err := extractCAFromKubeconfig(parsed)
+	require.NoError(t, err)
+
+	secret := &corev1.Secret{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: clusterCASecretName(cluster.Name), Namespace: SecretsNamespace}, secret))
+	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
+	assert.Equal(t, cluster.Name, secret.Labels[clusterv1.ClusterNameLabel])
+	assert.Equal(t, "cloud-workflow-engine", secret.Labels[constants.LabelKeyNvkeManagedBy])
+	assert.Equal(t, cluster.ID.String(), secret.Labels[constants.LabelKeyClusterID])
+	assert.Equal(t, wantCA, secret.Data[capisecret.TLSCrtDataName])
+	assert.Contains(t, string(secret.Data[capisecret.TLSKeyDataName]), "NOT-A-KEY")
+	assertOwnedByCAPICluster(t, secret, cluster)
 }
 
 func TestPublish_SkipsMissingCluster(t *testing.T) {

@@ -33,6 +33,18 @@ agent/build/deb_arm64/
 # bootstrap credentials and must never enter an image layer or BuildKit cache.
 .local/
 **/.local/
+.dev/
+**/.dev/
+.cache/
+**/.cache/
+.gocache/
+**/.gocache/
+.gomodcache/
+**/.gomodcache/
+*.qcow2
+**/*.qcow2
+*.log
+**/*.log
 *.kubeconfig
 **/*.kubeconfig
 coverage.txt

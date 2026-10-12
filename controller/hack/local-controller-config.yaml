@@ -47,6 +47,9 @@ nodeAgent:
     endpoint: http://169.254.169.254
     pluginChecksum: ""
     operatorTenant: ""
+    issuerURL: ""
+    discoveryURL: ""
+    discoveryCA: ""
   tlsJWT:
     enabled: false
     issuer: ""

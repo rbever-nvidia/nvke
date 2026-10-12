@@ -97,6 +97,9 @@ type DSXImdsConfig struct {
 	Endpoint       string `json:"endpoint"`
 	PluginChecksum string `json:"pluginChecksum"`
 	OperatorTenant string `json:"operatorTenant"`
+	IssuerURL      string `json:"issuerURL"`
+	DiscoveryURL   string `json:"discoveryURL"`
+	DiscoveryCA    string `json:"discoveryCA"`
 }
 
 // TLSJWTConfig mirrors config.TLSJWTConfig.

@@ -63,6 +63,9 @@ func (c *Config) ApplyTo(cfg *config.Config) {
 	cfg.NodeAgent.DSXImds.Endpoint = c.NodeAgent.DSXImds.Endpoint
 	cfg.NodeAgent.DSXImds.PluginChecksum = c.NodeAgent.DSXImds.PluginChecksum
 	cfg.NodeAgent.DSXImds.OperatorTenant = c.NodeAgent.DSXImds.OperatorTenant
+	cfg.NodeAgent.DSXImds.IssuerURL = c.NodeAgent.DSXImds.IssuerURL
+	cfg.NodeAgent.DSXImds.DiscoveryURL = c.NodeAgent.DSXImds.DiscoveryURL
+	cfg.NodeAgent.DSXImds.DiscoveryCA = c.NodeAgent.DSXImds.DiscoveryCA
 	cfg.NodeAgent.TLSJWT.Enabled = c.NodeAgent.TLSJWT.Enabled
 	cfg.NodeAgent.TLSJWT.Issuer = c.NodeAgent.TLSJWT.Issuer
 	cfg.NodeAgent.TLSJWT.JWKSURI = c.NodeAgent.TLSJWT.JWKSURI

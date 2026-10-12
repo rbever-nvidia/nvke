@@ -235,7 +235,17 @@ func (c *Controller) publish(ctx context.Context, cluster db.Cluster, adminConf 
 	} else {
 		publishErr = c.upsertKubeconfigSecret(ctx, live, KubeconfigSecretName(live.Name), adminConf, constants.LabelValueKubeconfigModeAdmin)
 	}
-	return errors.Join(publishErr, c.publishBreakglass(ctx, live, adminConf))
+	breakglassErr := c.publishBreakglass(ctx, live, adminConf)
+	// Ordered last because a valid Cluster.spec.controlPlaneEndpoint is what makes CAPI's own reconcileKubeconfig
+	// reachable, and that path mints <cluster>-kubeconfig by signing with a CA private key NKE does not hold.
+	// It only acts when the Secret is absent, so the endpoint is applied only after the kubeconfig Secret exists.
+	var contractErr error
+	if publishErr == nil {
+		if err := c.publishCAPIBootstrapContract(ctx, live, adminConf); err != nil {
+			contractErr = fmt.Errorf("publishing CAPI bootstrap contract for cluster %s: %w", live.Name, err)
+		}
+	}
+	return errors.Join(publishErr, breakglassErr, contractErr)
 }
 
 // publishBreakglass stores the nvke:breakglass kubeconfig in the admin Secret.

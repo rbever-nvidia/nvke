@@ -243,6 +243,61 @@ func BuildOIDCAuthenticationConfig(clusterName string, oidc config.NvkeOIDCAuth,
 	return authConfig, nil
 }
 
+func appendDSXIMDSAuthenticator(authConfig *OIDCAuthenticationConfig, clusterName string, dsxIMDS config.DSXImdsConfig) (*OIDCAuthenticationConfig, error) {
+	if dsxIMDS.IssuerURL == "" {
+		return authConfig, nil
+	}
+	authenticator, err := BuildDSXIMDSJWTAuthenticator(clusterName, dsxIMDS)
+	if err != nil {
+		return nil, err
+	}
+	authConfig.JWT = append(authConfig.JWT, authenticator)
+	return authConfig, nil
+}
+
+// BuildDSXIMDSJWTAuthenticator builds the tenant kube-apiserver trust rule for
+// worker bootstrap tokens minted by DSX IMDS. The worker obtains the token from
+// the host-local metadata endpoint, but kube-apiserver trusts the issuer URL in
+// the JWT `iss` claim and reads discovery/JWKS from the control-plane network.
+func BuildDSXIMDSJWTAuthenticator(clusterName string, dsxIMDS config.DSXImdsConfig) (apiserverv1.JWTAuthenticator, error) {
+	if clusterName == "" {
+		return apiserverv1.JWTAuthenticator{}, fmt.Errorf("cluster name is required for DSX IMDS authentication")
+	}
+	if dsxIMDS.IssuerURL == "" {
+		return apiserverv1.JWTAuthenticator{}, fmt.Errorf("DSX IMDS issuer URL is required")
+	}
+	if dsxIMDS.OperatorTenant == "" {
+		return apiserverv1.JWTAuthenticator{}, fmt.Errorf("DSX IMDS operator tenant is required")
+	}
+
+	usernamePrefix := oidcUsernamePrefix
+	var discoveryURL *string
+	if dsxIMDS.DiscoveryURL != "" {
+		discoveryURL = &dsxIMDS.DiscoveryURL
+	}
+	subjectPrefix := strconv.Quote("spiffe://" + dsxIMDS.OperatorTenant + ".")
+	return apiserverv1.JWTAuthenticator{
+		Issuer: apiserverv1.Issuer{
+			URL:                  dsxIMDS.IssuerURL,
+			DiscoveryURL:         discoveryURL,
+			CertificateAuthority: dsxIMDS.DiscoveryCA,
+			Audiences:            []string{clusterName},
+		},
+		ClaimMappings: apiserverv1.ClaimMappings{
+			Username: apiserverv1.PrefixedClaimOrExpression{
+				Claim:  oidcUsernameClaim,
+				Prefix: &usernamePrefix,
+			},
+			// Any process on the host can ask IMDS for an audience-scoped token.
+			// Keep bootstrap RBAC narrow: only DSX bare-metal host identities for
+			// the configured operator tenant enter the node-bootstrapper group.
+			Groups: apiserverv1.PrefixedClaimOrExpression{
+				Expression: fmt.Sprintf("claims.sub.startsWith(%s) && claims.sub.matches('^spiffe://[^/]+/bm/[^/]+$') ? ['nke:node-bootstrapper'] : []", subjectPrefix),
+			},
+		},
+	}, nil
+}
+
 // BuildOperatorJWTAuthenticator maps one validated operator provider to the
 // kube-apiserver authentication API. Its reserved-prefix rules run against the
 // final username and groups after claim mapping. Policy can reserve a complete

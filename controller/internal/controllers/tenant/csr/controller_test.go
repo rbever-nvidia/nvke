@@ -82,7 +82,7 @@ func newRegistrarForTest(t *testing.T) func(uuid.UUID) error {
 	scheme := runtime.NewScheme()
 	require.NoError(t, certificatesv1.AddToScheme(scheme))
 
-	registrar := NewRegistrar(staticDatabase{}, nil)
+	registrar := NewRegistrar(staticDatabase{}, nil, nil)
 
 	return func(clusterID uuid.UUID) error {
 		t.Helper()

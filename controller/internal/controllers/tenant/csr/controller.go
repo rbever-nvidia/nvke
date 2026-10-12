@@ -15,11 +15,13 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -28,6 +30,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/dsx-ai-factory/nvke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/tenant"
 	"github.com/dsx-ai-factory/nvke/controller/internal/db"
 )
@@ -39,6 +42,9 @@ const (
 	nodeUsernamePrefix = "system:node:"
 	nodeGroup          = "system:nodes"
 
+	nodeBootstrapperGroup = "nke:node-bootstrapper"
+	dsxIMDSBMPath         = "/bm/"
+
 	approvalReason = "NKEValidatedNodeIdentity"
 
 	unsupportedSANReason = "subject alternative names contain an unsupported identity"
@@ -49,13 +55,16 @@ type database interface {
 	ListNodes(ctx context.Context, filters db.NodeFilters) ([]db.Node, error)
 }
 
-// Reconciler approves pending kubelet-serving CSRs that match the node identity
-// recorded in the controller.
+// Reconciler approves pending kubelet CSRs that match the node identity recorded
+// in the controller. Serving CSRs are checked against the controller database;
+// client CSRs in this POC are checked against the DSX IMDS subject and the
+// owned NICoMachine in the management cluster.
 type Reconciler struct {
-	clusterID uuid.UUID
-	database  database
-	client    client.Client
-	logger    *slog.Logger
+	clusterID  uuid.UUID
+	database   database
+	mgmtClient client.Client
+	client     client.Client
+	logger     *slog.Logger
 }
 
 type csrDecision struct {
@@ -68,24 +77,25 @@ type csrDecision struct {
 // NewRegistrar returns a tenant-manager registrar. Each tenant manager
 // gets its own CSR informer and work queue; clusterID is therefore implicit in
 // every queued CSR name and cannot be confused with another tenant cluster.
-func NewRegistrar(database database, logger *slog.Logger) tenant.Registrar {
+func NewRegistrar(database database, mgmtClient client.Client, logger *slog.Logger) tenant.Registrar {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return func(clusterID uuid.UUID, manager ctrl.Manager) error {
 		controllerName, controllerOptions := tenantCSRControllerRegistration(clusterID)
 		reconciler := &Reconciler{
-			clusterID: clusterID,
-			database:  database,
-			client:    manager.GetClient(),
-			logger:    logger,
+			clusterID:  clusterID,
+			database:   database,
+			mgmtClient: mgmtClient,
+			client:     manager.GetClient(),
+			logger:     logger,
 		}
 		return ctrl.NewControllerManagedBy(manager).
 			Named(controllerName).
 			WithOptions(controllerOptions).
 			For(
 				&certificatesv1.CertificateSigningRequest{},
-				builder.WithPredicates(kubeletServingCSRPredicate()),
+				builder.WithPredicates(kubeletCSRPredicate()),
 			).
 			Complete(reconciler)
 	}
@@ -110,7 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		}
 		return ctrl.Result{}, fmt.Errorf("getting tenant CSR %s for cluster %s: %w", request.Name, r.clusterID, err)
 	}
-	if !isPendingKubeletServingCSR(csr) {
+	if !isPendingKubeletServingCSR(csr) && !isPendingKubeletClientCSR(csr) {
 		return ctrl.Result{}, nil
 	}
 	cluster, err := r.database.GetCluster(ctx, r.clusterID)
@@ -128,7 +138,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing controller nodes for cluster %s: %w", r.clusterID, err)
 	}
-	decision := planDecision(csr, nodes)
+
+	machines := &clusterv1.MachineList{}
+	if err := r.mgmtClient.List(ctx, machines,
+		client.InNamespace(constants.NamespaceNVKESystem),
+		client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing NVKE Machines for cluster %s: %w", cluster.Name, err)
+	}
+	nicoMachines := &nicov1.NicoMachineList{}
+	if err := r.mgmtClient.List(ctx, nicoMachines, client.InNamespace(constants.NamespaceNVKESystem)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing NVKE NicoMachines for cluster %s: %w", cluster.Name, err)
+	}
+
+	var decision csrDecision
+	if isPendingKubeletClientCSR(csr) {
+		decision = planClientDecision(csr, machines, nicoMachines)
+	} else {
+		decision = planServingDecision(csr, nodes, machines)
+	}
 	if decision.Action == decisionSkip {
 		r.logDecision(decision)
 		return ctrl.Result{}, nil
@@ -146,7 +174,7 @@ func (r *Reconciler) applyDecision(ctx context.Context, decision csrDecision) er
 		Type:               certificatesv1.CertificateApproved,
 		Status:             corev1.ConditionTrue,
 		Reason:             approvalReason,
-		Message:            "kubelet-serving CSR matches the node identity recorded by NVKE",
+		Message:            "kubelet CSR matches the node identity recorded by NVKE",
 		LastUpdateTime:     now,
 		LastTransitionTime: now,
 	})
@@ -168,7 +196,7 @@ func (r *Reconciler) logDecision(decision csrDecision) {
 		log = r.logger.Debug
 	}
 	log(
-		"Reconciled tenant kubelet-serving CSR",
+		"Reconciled tenant kubelet CSR",
 		"clusterID", r.clusterID,
 		"csrName", decision.CSR.Name,
 		"nodeName", decision.NodeName,
@@ -177,10 +205,10 @@ func (r *Reconciler) logDecision(decision csrDecision) {
 	)
 }
 
-func kubeletServingCSRPredicate() predicate.Predicate {
+func kubeletCSRPredicate() predicate.Predicate {
 	matches := func(object client.Object) bool {
 		csr, ok := object.(*certificatesv1.CertificateSigningRequest)
-		return ok && isPendingKubeletServingCSR(csr)
+		return ok && (isPendingKubeletServingCSR(csr) || isPendingKubeletClientCSR(csr))
 	}
 
 	return predicate.Funcs{
@@ -189,6 +217,19 @@ func kubeletServingCSRPredicate() predicate.Predicate {
 		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectOld) || matches(e.ObjectNew) },
 		GenericFunc: func(e event.GenericEvent) bool { return matches(e.Object) },
 	}
+}
+
+func isPendingKubeletClientCSR(csr *certificatesv1.CertificateSigningRequest) bool {
+	if csr.Spec.SignerName != certificatesv1.KubeAPIServerClientKubeletSignerName {
+		return false
+	}
+	for _, condition := range csr.Status.Conditions {
+		switch condition.Type {
+		case certificatesv1.CertificateApproved, certificatesv1.CertificateDenied, certificatesv1.CertificateFailed:
+			return false
+		}
+	}
+	return true
 }
 
 func isPendingKubeletServingCSR(csr *certificatesv1.CertificateSigningRequest) bool {
@@ -204,13 +245,13 @@ func isPendingKubeletServingCSR(csr *certificatesv1.CertificateSigningRequest) b
 	return true
 }
 
-func planDecision(csr *certificatesv1.CertificateSigningRequest, nodes []db.Node) csrDecision {
+func planServingDecision(csr *certificatesv1.CertificateSigningRequest, nodes []db.Node, machines *clusterv1.MachineList) csrDecision {
 	nodeName, ok := strings.CutPrefix(csr.Spec.Username, nodeUsernamePrefix)
 	if !ok || nodeName == "" {
 		return newDecision(csr, "", decisionSkip, "requestor is not a system:node identity")
 	}
 
-	expectedIP, known := knownNodeIP(nodes, nodeName)
+	expectedIP, known := knownNodeIP(nodes, machines, nodeName)
 	if !known {
 		return newDecision(csr, nodeName, decisionSkip, "node is not present in the controller's desired state")
 	}
@@ -218,6 +259,72 @@ func planDecision(csr *certificatesv1.CertificateSigningRequest, nodes []db.Node
 		return newDecision(csr, nodeName, decisionSkip, reason)
 	}
 	return newDecision(csr, nodeName, decisionApprove, "matches controller node identity")
+}
+
+// planClientDecision handles the kubelet client CSR created during kubeadm join.
+// The tenant API server has already authenticated the IMDS JWT, but approval
+// still binds the DSX bare-metal subject to exactly one expected worker
+// NicoMachine before granting a system:node client certificate.
+func planClientDecision(csr *certificatesv1.CertificateSigningRequest, machines *clusterv1.MachineList, nicoMachines *nicov1.NicoMachineList) csrDecision {
+	resourceID, ok := dsxIMDSResourceID(csr.Spec.Username)
+	if !ok {
+		return newDecision(csr, "", decisionSkip, "requestor is not a DSX IMDS bare-metal host identity")
+	}
+	if !slices.Contains(csr.Spec.Groups, nodeBootstrapperGroup) {
+		return newDecision(csr, "", decisionSkip, "spec.groups does not include nke:node-bootstrapper")
+	}
+
+	var matched *clusterv1.Machine
+	for i := range machines.Items {
+		machine := &machines.Items[i]
+		if !machineMatchesDSXIMDSResource(machine, nicoMachines, resourceID) {
+			continue
+		}
+		if matched != nil {
+			return newDecision(csr, machine.Name, decisionSkip, "DSX IMDS identity matched multiple Machines")
+		}
+		matched = machine
+	}
+	if matched == nil {
+		return newDecision(csr, "", decisionSkip, "DSX IMDS identity does not match a CAPI Machine")
+	}
+	if !matched.DeletionTimestamp.IsZero() {
+		return newDecision(csr, matched.Name, decisionSkip, "Machine is deleting")
+	}
+	if _, ok := matched.Labels[clusterv1.MachineControlPlaneLabel]; ok {
+		return newDecision(csr, matched.Name, decisionSkip, "Machine is labeled as a control-plane Machine")
+	}
+	if matched.Status.NodeRef.IsDefined() {
+		return newDecision(csr, matched.Name, decisionSkip, "Machine already has nodeRef")
+	}
+	if reason := validateClientCSR(csr, matched.Name); reason != "" {
+		return newDecision(csr, matched.Name, decisionSkip, reason)
+	}
+	return newDecision(csr, matched.Name, decisionApprove, "matches CAPI Machine DSX IMDS identity")
+}
+
+func dsxIMDSResourceID(username string) (string, bool) {
+	i := strings.LastIndex(username, dsxIMDSBMPath)
+	if i < 0 {
+		return "", false
+	}
+	resourceID := username[i+len(dsxIMDSBMPath):]
+	return resourceID, resourceID != "" && !strings.Contains(resourceID, "/")
+}
+
+func machineMatchesDSXIMDSResource(machine *clusterv1.Machine, nicoMachines *nicov1.NicoMachineList, resourceID string) bool {
+	for i := range nicoMachines.Items {
+		nicoMachine := &nicoMachines.Items[i]
+		if nicoMachine.Status.PrimaryDPUMachineID != resourceID {
+			continue
+		}
+		for _, owner := range nicoMachine.OwnerReferences {
+			if owner.Kind == "Machine" && owner.UID == machine.UID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func newDecision(csr *certificatesv1.CertificateSigningRequest, nodeName, action, reason string) csrDecision {
@@ -229,10 +336,22 @@ func newDecision(csr *certificatesv1.CertificateSigningRequest, nodeName, action
 	}
 }
 
-func knownNodeIP(nodes []db.Node, nodeName string) (string, bool) {
+func knownNodeIP(nodes []db.Node, machines *clusterv1.MachineList, nodeName string) (string, bool) {
 	for _, node := range nodes {
 		if node.Name == nodeName {
 			return node.IP, true
+		}
+	}
+	for _, machine := range machines.Items {
+		if !machine.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if machine.Status.NodeRef.Name == nodeName {
+			for _, address := range machine.Status.Addresses {
+				if address.Type == clusterv1.MachineInternalIP && address.Address != "" {
+					return address.Address, true
+				}
+			}
 		}
 	}
 	return "", false
@@ -281,6 +400,46 @@ func validateServingCSR(csr *certificatesv1.CertificateSigningRequest, nodeName,
 	}
 	if reason := validateSubjectAlternativeNames(parsed, nodeName, expectedIP); reason != "" {
 		return reason
+	}
+	return ""
+}
+
+func validateClientCSR(csr *certificatesv1.CertificateSigningRequest, nodeName string) string {
+	hasClientAuth := false
+	for _, usage := range csr.Spec.Usages {
+		if usage == certificatesv1.UsageClientAuth {
+			hasClientAuth = true
+			continue
+		}
+		if usage == certificatesv1.UsageDigitalSignature || usage == certificatesv1.UsageKeyEncipherment {
+			continue
+		}
+		return fmt.Sprintf("spec.usages contains disallowed usage %q", usage)
+	}
+	if !hasClientAuth {
+		return "spec.usages does not include client auth"
+	}
+
+	pemBlock, trailing := pem.Decode(csr.Spec.Request)
+	if pemBlock == nil || strings.TrimSpace(string(trailing)) != "" {
+		return "spec.request is not a single PEM-encoded certificate request"
+	}
+	parsed, err := x509.ParseCertificateRequest(pemBlock.Bytes)
+	if err != nil {
+		return "spec.request cannot be parsed as a certificate request"
+	}
+	if err := parsed.CheckSignature(); err != nil {
+		return "certificate request signature is invalid"
+	}
+	if !slices.Contains(parsed.Subject.Organization, nodeGroup) {
+		return "subject organization is not system:nodes"
+	}
+	expectedCommonName := nodeUsernamePrefix + nodeName
+	if parsed.Subject.CommonName != expectedCommonName {
+		return fmt.Sprintf("subject common name is not %s", expectedCommonName)
+	}
+	if len(parsed.DNSNames) > 0 || len(parsed.IPAddresses) > 0 || len(parsed.EmailAddresses) > 0 || len(parsed.URIs) > 0 {
+		return "subject alternative names are not allowed for kubelet client CSRs"
 	}
 	return ""
 }

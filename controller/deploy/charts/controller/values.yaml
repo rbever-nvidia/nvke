@@ -108,6 +108,12 @@ nodeAgent:
     # -- Metadata endpoint used by the external dsx_imds node attestor. The
     # default is the standard link-local metadata service address.
     endpoint: "http://169.254.169.254"
+    # -- DSX issuer trusted by tenant kube-apiservers for IMDS identity JWTs.
+    issuerURL: ""
+    # -- Optional OIDC discovery URL for the DSX IMDS issuer.
+    discoveryURL: ""
+    # -- Optional PEM CA bundle for the DSX IMDS issuer discovery and JWKS endpoints.
+    discoveryCA: ""
     # -- Optional SHA-256 checksum for the external dsx_imds plugin binary.
     # Leave empty to expand DSX_IMDS_PLUGIN_CHECKSUM from the node image's
     # /etc/spire-agent/spire-agent.env file.

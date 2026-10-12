@@ -7,66 +7,69 @@ DSX_IMDS_SERVER_IMAGE = "docker.local/dsx-imds-node-attestor-server:tilt"
 DSX_IMDS_MOCK_IMAGE = "docker.local/dsx-imds-attestation-mock:tilt"
 DSX_IMDS_ISSUER = "https://ds9.dsx.nvid.id"
 DSX_IMDS_MOCK_JWKS_URL = (
-    "http://dsx-imds-attestation-mock.spire-server.svc.cluster.local:8080/.well-known/jwks.json"
+    "http://dsx-imds-attestation-mock.spire-server.svc.cluster.local:8081/.well-known/jwks.json"
 )
 DSX_IMDS_NODE_PORT = 30445
+DSX_IMDS_ISSUER_PORT = 30446
+DSX_IMDS_ISSUER_TLS_PORT = 30447
+DSX_IMDS_ISSUER_TLS_SECRET = "dsx-imds-issuer-tls"
 
 def register(ctx):
     source_dir = ctx.cfg.get("dsx_imds_attestation_source_dir", "")
-    if source_dir == "":
-        fail("dsx-imds-attestation requires tilt_config.json field dsx_imds_attestation_source_dir")
-    if not source_dir.startswith("/"):
+    spire_attestation_enabled = source_dir != ""
+    if source_dir != "" and not source_dir.startswith("/"):
         source_dir = os.path.abspath(os.path.join(ctx.main_dir, source_dir))
-    if not os.path.exists(os.path.join(source_dir, "go.mod")):
+    if source_dir != "" and not os.path.exists(os.path.join(source_dir, "go.mod")):
         fail("dsx_imds_attestation_source_dir does not contain a dsx-identity checkout: %s" % source_dir)
 
     fixture_dir = ctx.provider_dir
     output_dir = os.path.join(ctx.main_dir, ".local", "dsx-imds-attestation")
     agent_plugin = os.path.join(output_dir, "dsx-imds-node-attestor-agent")
-    plugin_source_deps = [
-        os.path.join(source_dir, "go.mod"),
-        os.path.join(source_dir, "go.sum"),
-        os.path.join(source_dir, "cmd", "dsx-imds-node-attestor-agent"),
-        os.path.join(source_dir, "cmd", "dsx-imds-node-attestor-server"),
-        os.path.join(source_dir, "internal"),
-    ]
+    if spire_attestation_enabled:
+        plugin_source_deps = [
+            os.path.join(source_dir, "go.mod"),
+            os.path.join(source_dir, "go.sum"),
+            os.path.join(source_dir, "cmd", "dsx-imds-node-attestor-agent"),
+            os.path.join(source_dir, "cmd", "dsx-imds-node-attestor-server"),
+            os.path.join(source_dir, "internal"),
+        ]
 
-    local_resource(
-        DSX_IMDS_AGENT_PLUGIN_RESOURCE,
-        labels=["0-build"],
-        cmd=["bash", "-c", """
-          set -euo pipefail
-          mkdir -p "%s"
-          cd "%s"
-          CGO_ENABLED=0 GOOS=linux GOARCH=%s go build -o "%s" ./cmd/dsx-imds-node-attestor-agent
-        """ % (output_dir, source_dir, _docker_goarch(), agent_plugin)],
-        deps=plugin_source_deps,
-        allow_parallel=True,
-    )
+        local_resource(
+            DSX_IMDS_AGENT_PLUGIN_RESOURCE,
+            labels=["0-build"],
+            cmd=["bash", "-c", """
+              set -euo pipefail
+              mkdir -p "%s"
+              cd "%s"
+              CGO_ENABLED=0 GOOS=linux GOARCH=%s go build -o "%s" ./cmd/dsx-imds-node-attestor-agent
+            """ % (output_dir, source_dir, _docker_goarch(), agent_plugin)],
+            deps=plugin_source_deps,
+            allow_parallel=True,
+        )
 
-    local_resource(
-        DSX_IMDS_SERVER_PLUGIN_RESOURCE,
-        labels=["0-build"],
-        cmd=["bash", "-c", """
-          set -euo pipefail
-          if [ "$(uname -s)" = "Darwin" ] && [ -z "${DOCKER_HOST:-}" ]; then
-            export DOCKER_HOST="${COLIMA_DOCKER_HOST:-unix://${HOME}/.colima/default/docker.sock}"
-          fi
-          docker build --platform linux/%s --tag %s -f "%s" "%s"
-          kind load docker-image --name %s %s
-        """ % (
-            _docker_goarch(),
-            DSX_IMDS_SERVER_IMAGE,
-            os.path.join(fixture_dir, "Dockerfile.server"),
-            source_dir,
-            ctx.kind_cluster_name,
-            DSX_IMDS_SERVER_IMAGE,
-        )],
-        deps=plugin_source_deps + [
-            os.path.join(fixture_dir, "Dockerfile.server"),
-        ],
-        allow_parallel=True,
-    )
+        local_resource(
+            DSX_IMDS_SERVER_PLUGIN_RESOURCE,
+            labels=["0-build"],
+            cmd=["bash", "-c", """
+              set -euo pipefail
+              if [ "$(uname -s)" = "Darwin" ] && [ -z "${DOCKER_HOST:-}" ]; then
+                export DOCKER_HOST="${COLIMA_DOCKER_HOST:-unix://${HOME}/.colima/default/docker.sock}"
+              fi
+              docker build --platform linux/%s --tag %s -f "%s" "%s"
+              kind load docker-image --name %s %s
+            """ % (
+                _docker_goarch(),
+                DSX_IMDS_SERVER_IMAGE,
+                os.path.join(fixture_dir, "Dockerfile.server"),
+                source_dir,
+                ctx.kind_cluster_name,
+                DSX_IMDS_SERVER_IMAGE,
+            )],
+            deps=plugin_source_deps + [
+                os.path.join(fixture_dir, "Dockerfile.server"),
+            ],
+            allow_parallel=True,
+        )
 
     nke_repo_root = os.path.abspath(os.path.join(ctx.main_dir, ".."))
     custom_build(
@@ -97,39 +100,53 @@ def register(ctx):
     mock_yaml = mock_yaml.replace("__IMAGE__", DSX_IMDS_MOCK_IMAGE)
     mock_yaml = mock_yaml.replace("__MANAGEMENT_NODE__", "%s-control-plane" % ctx.kind_cluster_name)
     k8s_yaml(blob(mock_yaml))
+    issuer_tls_cert = _issuer_tls_secret(output_dir, ctx.site_controller_vip)
     k8s_resource(
         workload="dsx-imds-attestation-mock",
         new_name="dsx-imds-attestation-mock",
+        objects=["%s:secret:spire-server" % DSX_IMDS_ISSUER_TLS_SECRET],
         labels=["1-infra"],
         resource_deps=["spire-server"],
     )
 
-    audience = "spiffe://%s/spire/server" % ctx.spire_trust_domain
-    server_plugin = {
-        "image": {
-            "registry": "docker.local",
-            "repository": "dsx-imds-node-attestor-server",
-            "tag": "tilt",
-            "pullPolicy": "IfNotPresent",
-        },
-        "plugin_cmd": "/opt/spire/plugins/dsx-imds-node-attestor-server",
-        "plugin_checksum": "",
-        "plugin_data": {
-            "jwks_url": DSX_IMDS_MOCK_JWKS_URL,
-            "issuer": DSX_IMDS_ISSUER,
-            "audience": audience,
-        },
-    }
-
     node_endpoint = "http://%s:%d" % (ctx.site_controller_vip, DSX_IMDS_NODE_PORT)
+    issuer_endpoint = "https://%s:%d" % (ctx.site_controller_vip, DSX_IMDS_ISSUER_TLS_PORT)
     cwe_resource_deps = ["dsx-imds-attestation-mock"]
-    controller_method = ctx.cfg.get("controller_attestation_method", "dsxImds")
+    # A userspace port-forward presents every caller as 127.0.0.1, and the mock
+    # derives the host identity from that source address. On the kind gateway,
+    # publish the same process directly so a VM connection keeps the VM address.
+    if ctx.site_controller_vip == ctx.kind_host_ip:
+        issuer_tls_key = issuer_tls_cert.replace(".crt", ".key")
+        host_mock_binary = os.path.join(output_dir, "dsx-imds-attestation-mock")
+        local_resource(
+            "dsx-imds-host-listener",
+            labels=["1-infra"],
+            cmd="cd %s && go build -o %s ./hack/dsx-imds-attestation/mock" % (ctx.main_dir, host_mock_binary),
+            deps=[os.path.join(fixture_dir, "mock")],
+            serve_cmd="%s --imds-listen=%s:%d --issuer-listen=127.0.0.1:0 --issuer-tls-listen=%s:%d --issuer-tls-cert=%s --issuer-tls-key=%s" % (
+                host_mock_binary,
+                ctx.kind_host_ip,
+                DSX_IMDS_NODE_PORT,
+                ctx.kind_host_ip,
+                DSX_IMDS_ISSUER_TLS_PORT,
+                issuer_tls_cert,
+                issuer_tls_key,
+            ),
+            resource_deps=["dsx-imds-attestation-mock"],
+            readiness_probe=probe(exec=exec_action(["nc", "-z", ctx.kind_host_ip, str(DSX_IMDS_NODE_PORT)]), period_secs=5, failure_threshold=2),
+            allow_parallel=True,
+        )
+        cwe_resource_deps.append("dsx-imds-host-listener")
+    controller_method = ctx.cfg.get("controller_attestation_method", "dsxImds" if spire_attestation_enabled else "tpm")
     if controller_method not in ["tpm", "joinToken", "dsxImds"]:
         fail("controller_attestation_method must be tpm, joinToken, or dsxImds")
     cwe_chart_flags = [
         "--set-string", "nodeAgent.spireAttestationMethod=%s" % controller_method,
         "--set-string", "nodeAgent.dsxImds.operatorTenant=operator-1",
         "--set-string", "nodeAgent.dsxImds.endpoint=%s" % node_endpoint,
+        "--set-string", "nodeAgent.dsxImds.issuerURL=%s" % DSX_IMDS_ISSUER,
+        "--set-string", "nodeAgent.dsxImds.discoveryURL=%s/.well-known/openid-configuration" % issuer_endpoint,
+        "--set-file", "nodeAgent.dsxImds.discoveryCA=%s" % issuer_tls_cert,
     ]
     if "dsx-identity-exchange" in ctx.provider_names and ctx.cfg.get("dsx_imds_tls_jwt", True):
         site_address = ctx.cfg.get("site_controller_vip", "")
@@ -178,16 +195,78 @@ def register(ctx):
             "--set", "nodeAgent.externalMTLS.enabled=true",
             "--set-string", "nodeAgent.externalMTLS.secret.name=dsx-controller-client",
         ]
+    spire_chart_flags = []
+    spire_resource_deps = []
+    if spire_attestation_enabled:
+        audience = "spiffe://%s/spire/server" % ctx.spire_trust_domain
+        server_plugin = {
+            "image": {
+                "registry": "docker.local",
+                "repository": "dsx-imds-node-attestor-server",
+                "tag": "tilt",
+                "pullPolicy": "IfNotPresent",
+            },
+            "plugin_cmd": "/opt/spire/plugins/dsx-imds-node-attestor-server",
+            "plugin_checksum": "",
+            "plugin_data": {
+                "jwks_url": DSX_IMDS_MOCK_JWKS_URL,
+                "issuer": DSX_IMDS_ISSUER,
+                "audience": audience,
+            },
+        }
+        spire_chart_flags = [
+            "--set-json",
+            "spire-server.customPlugins.nodeAttestor.dsx_imds=%s" % encode_json(server_plugin),
+        ]
+        spire_resource_deps = [DSX_IMDS_SERVER_PLUGIN_RESOURCE]
+
     return struct(
         cwe_resource_deps=cwe_resource_deps,
         cwe_env_overrides={},
         cwe_chart_flags=cwe_chart_flags,
-        spire_chart_flags=[
-            "--set-json",
-            "spire-server.customPlugins.nodeAttestor.dsx_imds=%s" % encode_json(server_plugin),
-        ],
-        spire_resource_deps=[DSX_IMDS_SERVER_PLUGIN_RESOURCE],
+        spire_chart_flags=spire_chart_flags,
+        spire_resource_deps=spire_resource_deps,
     )
+
+# The tenant kube-apiserver only accepts an HTTPS discovery URL, and the chart
+# flags that carry its CA are fixed at Tiltfile load, so the self-signed issuer
+# certificate is generated here rather than by cert-manager.
+def _issuer_tls_secret(output_dir, site_address):
+    san = ("IP:%s" if _looks_like_ipv4(site_address) else "DNS:%s") % site_address
+    cert = os.path.join(output_dir, "issuer-tls-%s.crt" % site_address)
+    key = os.path.join(output_dir, "issuer-tls-%s.key" % site_address)
+    local(
+        """
+        set -eu
+        mkdir -p "%s"
+        if [ ! -s "%s" ] || [ ! -s "%s" ]; then
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 \
+            -subj "/CN=dsx-imds-attestation-mock" -addext "subjectAltName=%s" \
+            -keyout "%s" -out "%s" >/dev/null 2>&1
+        fi
+        """ % (output_dir, cert, key, san, key, cert),
+        quiet=True,
+        echo_off=True,
+    )
+    k8s_yaml(local(
+        "kubectl create secret tls %s -n spire-server --cert='%s' --key='%s' --dry-run=client -o yaml" % (
+            DSX_IMDS_ISSUER_TLS_SECRET,
+            cert,
+            key,
+        ),
+        quiet=True,
+        echo_off=True,
+    ))
+    return cert
+
+def _looks_like_ipv4(value):
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not part.isdigit() or int(part) > 255:
+            return False
+    return True
 
 def _docker_goarch():
     arch = str(local(

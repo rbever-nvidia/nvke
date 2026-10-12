@@ -21,6 +21,7 @@ func TestIMDSServer_HandleIdentity(t *testing.T) {
 
 	type parameters struct {
 		metadataHeader string
+		accept         string
 		audience       string
 		wantStatus     int
 		verify         func(*testing.T, *imdsServer, *httptest.ResponseRecorder)
@@ -28,6 +29,7 @@ func TestIMDSServer_HandleIdentity(t *testing.T) {
 	tests := map[string]parameters{
 		"issues a signed host identity": {
 			metadataHeader: "true",
+			accept:         "text/plain",
 			audience:       "spiffe://cwe-capi.nke.local/spire/server",
 			wantStatus:     http.StatusOK,
 			verify: func(t *testing.T, server *imdsServer, response *httptest.ResponseRecorder) {
@@ -40,6 +42,24 @@ func TestIMDSServer_HandleIdentity(t *testing.T) {
 				require.Equal(t, "spiffe://operator-1.ds9.dsx.nvid.id/bm/host-6d99cbd08fc6c99c", claims["sub"])
 				require.Equal(t, "spiffe://cwe-capi.nke.local/spire/server", claims["aud"])
 				require.Equal(t, "text/plain", response.Header().Get("Content-Type"))
+			},
+		},
+		"defaults to a JSON token": {
+			metadataHeader: "true",
+			audience:       "spiffe://cwe-capi.nke.local/spire/server",
+			wantStatus:     http.StatusOK,
+			verify: func(t *testing.T, server *imdsServer, response *httptest.ResponseRecorder) {
+				t.Helper()
+				var body struct {
+					Token string `json:"token"`
+				}
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+				parsed, err := jwt.ParseSigned(body.Token, []jose.SignatureAlgorithm{jose.ES256})
+				require.NoError(t, err)
+				var claims map[string]any
+				require.NoError(t, parsed.Claims(server.publicKey.Key, &claims))
+				require.Equal(t, "spiffe://operator-1.ds9.dsx.nvid.id/bm/host-6d99cbd08fc6c99c", claims["sub"])
+				require.Equal(t, "application/json", response.Header().Get("Content-Type"))
 			},
 		},
 		"rejects a missing metadata header": {
@@ -58,9 +78,12 @@ func TestIMDSServer_HandleIdentity(t *testing.T) {
 			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/latest/meta-data/identity?aud="+url.QueryEscape(params.audience), http.NoBody)
 			request.RemoteAddr = "192.0.2.10:12345"
 			request.Header.Set("Metadata", params.metadataHeader)
+			if params.accept != "" {
+				request.Header.Set("Accept", params.accept)
+			}
 			response := httptest.NewRecorder()
 
-			server.handler().ServeHTTP(response, request)
+			server.imdsHandler().ServeHTTP(response, request)
 
 			require.Equal(t, params.wantStatus, response.Code)
 			if params.verify != nil {
@@ -75,7 +98,7 @@ func TestIMDSServer_HandleJWKS(t *testing.T) {
 	server := newTestIMDSServer(t)
 	response := httptest.NewRecorder()
 
-	server.handler().ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/.well-known/jwks.json", http.NoBody))
+	server.issuerHandler().ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/.well-known/jwks.json", http.NoBody))
 
 	require.Equal(t, http.StatusOK, response.Code)
 	var keys jose.JSONWebKeySet

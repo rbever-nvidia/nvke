@@ -412,7 +412,7 @@ func main() {
 	defer temporalClient.Close()
 
 	tenantRegistrars := []tenant.Registrar{
-		csr.NewRegistrar(dbInstance, logger.With("logger", "tenant-csr-controller")),
+		csr.NewRegistrar(dbInstance, managementK8sClient, logger.With("logger", "tenant-csr-controller")),
 	}
 	if !cfg.NodeHealthCheckDisabled {
 		tenantRegistrars = append(tenantRegistrars,

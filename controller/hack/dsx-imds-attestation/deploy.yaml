@@ -27,9 +27,21 @@ spec:
         - name: imds
           image: __IMAGE__
           imagePullPolicy: IfNotPresent
+          args:
+            - --issuer-tls-listen=:8443
+            - --issuer-tls-cert=/tls/tls.crt
+            - --issuer-tls-key=/tls/tls.key
           ports:
             - name: http
               containerPort: 8080
+            - name: issuer
+              containerPort: 8081
+            - name: issuer-tls
+              containerPort: 8443
+          volumeMounts:
+            - name: issuer-tls
+              mountPath: /tls
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /ready
@@ -51,6 +63,10 @@ spec:
             runAsGroup: 65532
             runAsNonRoot: true
             runAsUser: 65532
+      volumes:
+        - name: issuer-tls
+          secret:
+            secretName: dsx-imds-issuer-tls
 ---
 apiVersion: v1
 kind: Service
@@ -63,7 +79,16 @@ spec:
   selector:
     app.kubernetes.io/name: dsx-imds-attestation-mock
   ports:
-    - name: http
+    - name: imds
       port: 8080
       targetPort: http
       nodePort: 30445
+    - name: issuer
+      port: 8081
+      targetPort: issuer
+      nodePort: 30446
+    # kube-apiserver requires an HTTPS discovery URL for JWT authenticators.
+    - name: issuer-tls
+      port: 8443
+      targetPort: issuer-tls
+      nodePort: 30447

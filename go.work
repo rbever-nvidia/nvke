@@ -17,5 +17,4 @@ use (
 	./controller/test/e2e
 	./management-engine
 	./os-image
-	./release
 )

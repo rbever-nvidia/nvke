@@ -72,6 +72,9 @@ data:
         endpoint: {{ if $dsxImds }}{{ trim .Values.nodeAgent.dsxImds.endpoint | quote }}{{ else }}"http://169.254.169.254"{{ end }}
         pluginChecksum: {{ if $dsxImds }}{{ .Values.nodeAgent.dsxImds.pluginChecksum | quote }}{{ else }}""{{ end }}
         operatorTenant: {{ if $dsxImds }}{{ trim .Values.nodeAgent.dsxImds.operatorTenant | quote }}{{ else }}""{{ end }}
+        issuerURL: {{ .Values.nodeAgent.dsxImds.issuerURL | quote }}
+        discoveryURL: {{ .Values.nodeAgent.dsxImds.discoveryURL | quote }}
+        discoveryCA: {{ .Values.nodeAgent.dsxImds.discoveryCA | quote }}
       tlsJWT:
         enabled: {{ $tlsJwt.enabled }}
         issuer: {{ if $tlsJwt.enabled }}{{ required "nodeAgent.tlsJwt.issuer is required when TLS/JWT is enabled" $tlsJwt.issuer | quote }}{{ else }}""{{ end }}

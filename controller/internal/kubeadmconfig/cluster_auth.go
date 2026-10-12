@@ -28,13 +28,14 @@ type ClusterAuthentication struct {
 	ClusterName   string
 	Shared        config.NvkeOIDCAuth
 	SharedEnabled bool
+	DSXIMDS       config.DSXImdsConfig
 	Providers     []controllerconfig.OIDCProvider
 	TrustDomain   string
 }
 
 // Needed reports whether the cluster has any OIDC provider.
 func (c ClusterAuthentication) Needed() bool {
-	return c.SharedEnabled || len(c.Providers) > 0
+	return c.SharedEnabled || c.DSXIMDS.IssuerURL != "" || len(c.Providers) > 0
 }
 
 // BuildClusterAuthenticationConfig builds a cluster's AuthenticationConfiguration.
@@ -55,19 +56,30 @@ func BuildClusterAuthenticationConfig(ctx context.Context, c client.Client, in C
 			}
 		}
 		if len(in.Providers) == 0 {
-			return BuildOIDCAuthenticationConfig(in.ClusterName, in.Shared, caBundle)
+			authn, err := BuildOIDCAuthenticationConfig(in.ClusterName, in.Shared, caBundle)
+			if err != nil {
+				return nil, err
+			}
+			return appendDSXIMDSAuthenticator(authn, in.ClusterName, in.DSXIMDS)
 		}
+	}
+	if !in.SharedEnabled && len(in.Providers) == 0 {
+		return appendDSXIMDSAuthenticator(&OIDCAuthenticationConfig{}, in.ClusterName, in.DSXIMDS)
 	}
 
 	policy, err := LoadOperatorJWTPolicy(ctx, c, in.TrustDomain)
 	if err != nil {
 		return nil, err
 	}
-	return BuildCombinedAuthenticationConfig(in.ClusterName, controllerconfig.ManagementOIDCAuthConfig{
+	authn, err := BuildCombinedAuthenticationConfig(in.ClusterName, controllerconfig.ManagementOIDCAuthConfig{
 		Enabled:      in.SharedEnabled,
 		IssuerURL:    in.Shared.IssuerURL,
 		DiscoveryURL: in.Shared.DiscoveryURL,
 	}, caBundle, in.Providers, policy)
+	if err != nil {
+		return nil, err
+	}
+	return appendDSXIMDSAuthenticator(authn, in.ClusterName, in.DSXIMDS)
 }
 
 // LoadOperatorJWTPolicy reserves the management SPIFFE trust domain and the User

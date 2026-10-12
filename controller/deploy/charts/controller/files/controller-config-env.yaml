@@ -30,6 +30,9 @@ TENANT_ACCESS_ENABLED: tenantAccessEnabled
 NODE_AGENT_UPDATE_METHOD: nodeAgent.updateMethod
 NODE_AGENT_SPIRE_ATTESTATION_METHOD: nodeAgent.spireAttestationMethod
 NODE_AGENT_DSX_IMDS_ENDPOINT: nodeAgent.dsxImds.endpoint
+NODE_AGENT_DSX_IMDS_ISSUER_URL: nodeAgent.dsxImds.issuerURL
+NODE_AGENT_DSX_IMDS_DISCOVERY_URL: nodeAgent.dsxImds.discoveryURL
+NODE_AGENT_DSX_IMDS_DISCOVERY_CA: nodeAgent.dsxImds.discoveryCA
 NODE_AGENT_DSX_IMDS_PLUGIN_CHECKSUM: nodeAgent.dsxImds.pluginChecksum
 NODE_AGENT_DSX_IMDS_OPERATOR_TENANT: nodeAgent.dsxImds.operatorTenant
 NODE_AGENT_TLS_JWT_ENABLED: nodeAgent.tlsJWT.enabled
