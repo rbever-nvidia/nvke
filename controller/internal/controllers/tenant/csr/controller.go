@@ -13,9 +13,10 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"time"
 
-	"github.com/google/uuid"
 	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
+	"github.com/google/uuid"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +38,7 @@ import (
 
 const (
 	decisionApprove = "approve"
+	decisionRequeue = "requeue"
 	decisionSkip    = "skip"
 
 	nodeUsernamePrefix = "system:node:"
@@ -48,6 +50,12 @@ const (
 	approvalReason = "NKEValidatedNodeIdentity"
 
 	unsupportedSANReason = "subject alternative names contain an unsupported identity"
+
+	unknownNodeReason = "node is not present in the controller's desired state"
+
+	// The kubelet requests a serving certificate as it joins, before Cluster API
+	// writes the Machine nodeRef that records the accepted node.
+	unknownNodeRetryInterval = 10 * time.Second
 )
 
 type database interface {
@@ -157,15 +165,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	} else {
 		decision = planServingDecision(csr, nodes, machines)
 	}
-	if decision.Action == decisionSkip {
+	switch decision.Action {
+	case decisionSkip:
 		r.logDecision(decision)
 		return ctrl.Result{}, nil
+	case decisionRequeue:
+		r.logDecision(decision)
+		return ctrl.Result{RequeueAfter: unknownNodeRetryInterval}, nil
+	case decisionApprove:
+		if err := r.applyDecision(ctx, decision); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.logDecision(decision)
+		return ctrl.Result{}, nil
+	default:
+		return ctrl.Result{}, fmt.Errorf("unsupported CSR decision action %q", decision.Action)
 	}
-	if err := r.applyDecision(ctx, decision); err != nil {
-		return ctrl.Result{}, err
-	}
-	r.logDecision(decision)
-	return ctrl.Result{}, nil
 }
 
 func (r *Reconciler) applyDecision(ctx context.Context, decision csrDecision) error {
@@ -192,7 +207,7 @@ func (r *Reconciler) applyDecision(ctx context.Context, decision csrDecision) er
 
 func (r *Reconciler) logDecision(decision csrDecision) {
 	log := r.logger.Info
-	if decision.Action == decisionSkip {
+	if decision.Action == decisionSkip || decision.Action == decisionRequeue {
 		log = r.logger.Debug
 	}
 	log(
@@ -253,7 +268,7 @@ func planServingDecision(csr *certificatesv1.CertificateSigningRequest, nodes []
 
 	expectedIP, known := knownNodeIP(nodes, machines, nodeName)
 	if !known {
-		return newDecision(csr, nodeName, decisionSkip, "node is not present in the controller's desired state")
+		return newDecision(csr, nodeName, decisionRequeue, unknownNodeReason)
 	}
 	if reason := validateServingCSR(csr, nodeName, expectedIP); reason != "" {
 		return newDecision(csr, nodeName, decisionSkip, reason)

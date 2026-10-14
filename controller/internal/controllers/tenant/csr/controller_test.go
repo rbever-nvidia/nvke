@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	certificatesv1 "k8s.io/api/certificates/v1"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -35,6 +37,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/dsx-ai-factory/nvke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nvke/controller/internal/db"
 )
 
@@ -219,7 +222,7 @@ func TestPlanDecision(t *testing.T) {
 
 	t.Run("valid CSR is approved", func(t *testing.T) {
 		t.Parallel()
-		decision := planDecision(valid, nodes)
+		decision := planServingDecision(valid, nodes, &clusterv1.MachineList{})
 		require.Equal(t, decisionApprove, decision.Action)
 		require.Equal(t, valid.Name, decision.CSR.Name)
 	})
@@ -227,16 +230,16 @@ func TestPlanDecision(t *testing.T) {
 	t.Run("invalid CSR is skipped", func(t *testing.T) {
 		t.Parallel()
 		invalid := newServingCSR(t, "invalid", time.Now(), "system:node:worker-1", []string{"system:nodes"}, []string{"other"}, nil, nil)
-		decision := planDecision(invalid, nodes)
+		decision := planServingDecision(invalid, nodes, &clusterv1.MachineList{})
 		require.Equal(t, decisionSkip, decision.Action)
 		require.Equal(t, `DNS SAN "other" does not match controller node name`, decision.Reason)
 	})
 
-	t.Run("unknown node is skipped", func(t *testing.T) {
+	t.Run("unknown node is retried", func(t *testing.T) {
 		t.Parallel()
-		decision := planDecision(valid, nil)
-		require.Equal(t, decisionSkip, decision.Action)
-		require.Equal(t, "node is not present in the controller's desired state", decision.Reason)
+		decision := planServingDecision(valid, nil, &clusterv1.MachineList{})
+		require.Equal(t, decisionRequeue, decision.Action)
+		require.Equal(t, unknownNodeReason, decision.Reason)
 	})
 }
 
@@ -251,6 +254,10 @@ func TestLogDecisionUsesDecisionLevel(t *testing.T) {
 		},
 		"skip is diagnostic": {
 			action:    decisionSkip,
+			wantLevel: `"level":"DEBUG"`,
+		},
+		"requeue is diagnostic": {
+			action:    decisionRequeue,
 			wantLevel: `"level":"DEBUG"`,
 		},
 	}
@@ -284,10 +291,11 @@ func TestReconcilerApprovesValidatedCSR(t *testing.T) {
 	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(csr).Build()
 
 	reconciler := &Reconciler{
-		clusterID: clusterID,
-		database:  staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
-		client:    tenantClient,
-		logger:    slog.New(slog.DiscardHandler),
+		clusterID:  clusterID,
+		database:   staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
+		mgmtClient: managementClient(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: csr.Name}})
@@ -312,10 +320,11 @@ func TestReconcilerOnlyApprovesRequestedCSR(t *testing.T) {
 	require.NoError(t, certificatesv1.AddToScheme(scheme))
 	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(newest, older).Build()
 	reconciler := &Reconciler{
-		clusterID: clusterID,
-		database:  staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
-		client:    tenantClient,
-		logger:    slog.New(slog.DiscardHandler),
+		clusterID:  clusterID,
+		database:   staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
+		mgmtClient: managementClient(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: older.Name}})
@@ -352,10 +361,11 @@ func TestReconcilerRetriesApprovalFailure(t *testing.T) {
 		}).
 		Build()
 	reconciler := &Reconciler{
-		clusterID: clusterID,
-		database:  staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
-		client:    tenantClient,
-		logger:    slog.New(slog.DiscardHandler),
+		clusterID:  clusterID,
+		database:   staticDatabase{nodes: []db.Node{{Name: "worker-1", IP: "192.0.2.10"}}},
+		mgmtClient: managementClient(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: pending.Name}})
@@ -407,6 +417,96 @@ func TestReconcilerRetriesNodeLookupFailure(t *testing.T) {
 	require.ErrorContains(t, err, "listing controller nodes")
 }
 
+func TestReconcilerRetriesUnknownServingNode(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	pending := newServingCSR(t, "worker-1-serving", time.Now(), "system:node:worker-1", []string{"system:nodes"}, []string{"worker-1"}, nil, nil)
+	scheme := runtime.NewScheme()
+	require.NoError(t, certificatesv1.AddToScheme(scheme))
+	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pending).Build()
+	reconciler := &Reconciler{
+		clusterID:  clusterID,
+		database:   staticDatabase{},
+		mgmtClient: managementClient(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
+	}
+
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: pending.Name}})
+	require.NoError(t, err)
+	require.Equal(t, unknownNodeRetryInterval, result.RequeueAfter)
+	unchanged := &certificatesv1.CertificateSigningRequest{}
+	require.NoError(t, tenantClient.Get(context.Background(), types.NamespacedName{Name: pending.Name}, unchanged))
+	require.Empty(t, unchanged.Status.Conditions)
+}
+
+func TestReconcilerRetriesOldUnknownServingNode(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	pending := newServingCSR(t, "worker-1-serving", time.Now().Add(-time.Hour), "system:node:worker-1", []string{"system:nodes"}, []string{"worker-1"}, nil, nil)
+	scheme := runtime.NewScheme()
+	require.NoError(t, certificatesv1.AddToScheme(scheme))
+	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pending).Build()
+	reconciler := &Reconciler{
+		clusterID:  clusterID,
+		database:   staticDatabase{},
+		mgmtClient: managementClient(t),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
+	}
+
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: pending.Name}})
+	require.NoError(t, err)
+	require.Equal(t, unknownNodeRetryInterval, result.RequeueAfter)
+	unchanged := &certificatesv1.CertificateSigningRequest{}
+	require.NoError(t, tenantClient.Get(context.Background(), types.NamespacedName{Name: pending.Name}, unchanged))
+	require.Empty(t, unchanged.Status.Conditions)
+}
+
+func TestReconcilerApprovesServingCSRFromMachineNodeRef(t *testing.T) {
+	t.Parallel()
+
+	const clusterName = "tenant-a"
+	clusterID := uuid.New()
+	pending := newServingCSR(t, "worker-1-serving", time.Now(), "system:node:worker-1", []string{"system:nodes"}, []string{"worker-1"}, nil, nil)
+	scheme := runtime.NewScheme()
+	require.NoError(t, certificatesv1.AddToScheme(scheme))
+	tenantClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pending).Build()
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-1",
+			Namespace: constants.NamespaceNVKESystem,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel: clusterName,
+			},
+		},
+		Status: clusterv1.MachineStatus{
+			NodeRef: clusterv1.MachineNodeReference{Name: "worker-1"},
+			Addresses: clusterv1.MachineAddresses{{
+				Type:    clusterv1.MachineInternalIP,
+				Address: "192.0.2.10",
+			}},
+		},
+	}
+	reconciler := &Reconciler{
+		clusterID:  clusterID,
+		database:   staticDatabase{cluster: db.Cluster{Name: clusterName}},
+		mgmtClient: managementClient(t, machine),
+		client:     tenantClient,
+		logger:     slog.New(slog.DiscardHandler),
+	}
+
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: pending.Name}})
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	approved := &certificatesv1.CertificateSigningRequest{}
+	require.NoError(t, tenantClient.Get(context.Background(), types.NamespacedName{Name: pending.Name}, approved))
+	require.Equal(t, certificatesv1.CertificateApproved, approved.Status.Conditions[0].Type)
+	require.Equal(t, approvalReason, approved.Status.Conditions[0].Reason)
+}
+
 func TestReconcilerDoesNotApproveForDeletingCluster(t *testing.T) {
 	t.Parallel()
 
@@ -429,6 +529,14 @@ func TestReconcilerDoesNotApproveForDeletingCluster(t *testing.T) {
 	unchanged := &certificatesv1.CertificateSigningRequest{}
 	require.NoError(t, tenantClient.Get(context.Background(), types.NamespacedName{Name: pending.Name}, unchanged))
 	require.Empty(t, unchanged.Status.Conditions)
+}
+
+func managementClient(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, clusterv1.AddToScheme(scheme))
+	require.NoError(t, nicov1.AddToScheme(scheme))
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 }
 
 func newServingCSR(
