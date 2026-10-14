@@ -326,6 +326,19 @@ func main() {
 			logger.Error("Failed to set up machine SPIRE entry controller", "error", err)
 			os.Exit(1)
 		}
+
+		if cfg.WorkerBootstrapIdentitySource == config.WorkerBootstrapIdentitySourceSPIRE {
+			machineJoinSpireEntryController := capi.NewMachineJoinSpireEntryController(
+				cfg,
+				k8sControllerManager.GetClient(),
+				logger.With("logger", "machine-join-spire-entry-controller"),
+				trustDomain,
+			)
+			if err := machineJoinSpireEntryController.SetupWithManager(k8sControllerManager); err != nil {
+				logger.Error("Failed to set up machine join SPIRE entry controller", "error", err)
+				os.Exit(1)
+			}
+		}
 	}
 
 	if !cfg.NicoControllersEnabled {

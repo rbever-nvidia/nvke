@@ -212,35 +212,61 @@ func BuildOIDCAuthenticationConfig(clusterName string, oidc config.NvkeOIDCAuth,
 		return nil, fmt.Errorf("OIDC issuer URL is required when OIDC auth is enabled")
 	}
 
-	usernamePrefix := oidcUsernamePrefix
-
 	var discoveryURL *string
 	if oidc.DiscoveryURL != "" {
 		d := oidc.DiscoveryURL
 		discoveryURL = &d
 	}
 
+	certificateAuthority := ""
+	if len(caBundle) != 0 {
+		certificateAuthority = string(caBundle)
+	}
+	authenticator := buildBootstrapJWTAuthenticator(
+		clusterName,
+		oidc.IssuerURL,
+		discoveryURL,
+		certificateAuthority,
+		"",
+	)
 	authConfig := &OIDCAuthenticationConfig{
-		JWT: []OIDCProvider{
-			{
-				Issuer: OIDCIssuer{
-					URL:          oidc.IssuerURL,
-					DiscoveryURL: discoveryURL,
-					Audiences:    []string{clusterName},
-				},
-				ClaimMappings: OIDCClaimMappings{
-					Username: OIDCPrefixedClaimOrExpression{
-						Claim:  oidcUsernameClaim,
-						Prefix: &usernamePrefix,
-					},
-				},
+		JWT: []OIDCProvider{authenticator},
+	}
+	return authConfig, nil
+}
+
+func buildBootstrapJWTAuthenticator(
+	clusterName string,
+	issuerURL string,
+	discoveryURL *string,
+	certificateAuthority string,
+	groupExpression string,
+) apiserverv1.JWTAuthenticator {
+	usernamePrefix := oidcUsernamePrefix
+	authenticator := apiserverv1.JWTAuthenticator{
+		Issuer: apiserverv1.Issuer{
+			URL:                  issuerURL,
+			DiscoveryURL:         discoveryURL,
+			CertificateAuthority: certificateAuthority,
+			Audiences:            []string{clusterName},
+		},
+		ClaimMappings: apiserverv1.ClaimMappings{
+			Username: apiserverv1.PrefixedClaimOrExpression{
+				Claim:  oidcUsernameClaim,
+				Prefix: &usernamePrefix,
 			},
 		},
 	}
-	if len(caBundle) != 0 {
-		authConfig.JWT[0].Issuer.CertificateAuthority = string(caBundle)
+	if groupExpression != "" {
+		authenticator.ClaimMappings.Groups = apiserverv1.PrefixedClaimOrExpression{
+			Expression: groupExpression,
+		}
 	}
-	return authConfig, nil
+	return authenticator
+}
+
+func spireJoinBootstrapGroupExpression() string {
+	return "claims.sub.matches('^spiffe://[^/]+/kubeadm/join/.+') ? ['nvke:node-bootstrapper'] : []"
 }
 
 func appendDSXIMDSAuthenticator(authConfig *OIDCAuthenticationConfig, clusterName string, dsxIMDS config.DSXImdsConfig) (*OIDCAuthenticationConfig, error) {
@@ -270,32 +296,25 @@ func BuildDSXIMDSJWTAuthenticator(clusterName string, dsxIMDS config.DSXImdsConf
 		return apiserverv1.JWTAuthenticator{}, fmt.Errorf("DSX IMDS operator tenant is required")
 	}
 
-	usernamePrefix := oidcUsernamePrefix
 	var discoveryURL *string
 	if dsxIMDS.DiscoveryURL != "" {
 		discoveryURL = &dsxIMDS.DiscoveryURL
 	}
-	subjectPrefix := strconv.Quote("spiffe://" + dsxIMDS.OperatorTenant + ".")
-	return apiserverv1.JWTAuthenticator{
-		Issuer: apiserverv1.Issuer{
-			URL:                  dsxIMDS.IssuerURL,
-			DiscoveryURL:         discoveryURL,
-			CertificateAuthority: dsxIMDS.DiscoveryCA,
-			Audiences:            []string{clusterName},
-		},
-		ClaimMappings: apiserverv1.ClaimMappings{
-			Username: apiserverv1.PrefixedClaimOrExpression{
-				Claim:  oidcUsernameClaim,
-				Prefix: &usernamePrefix,
-			},
-			// Any process on the host can ask IMDS for an audience-scoped token.
-			// Keep bootstrap RBAC narrow: only DSX bare-metal host identities for
-			// the configured operator tenant enter the node-bootstrapper group.
-			Groups: apiserverv1.PrefixedClaimOrExpression{
-				Expression: fmt.Sprintf("claims.sub.startsWith(%s) && claims.sub.matches('^spiffe://[^/]+/bm/[^/]+$') ? ['nvke:node-bootstrapper'] : []", subjectPrefix),
-			},
-		},
-	}, nil
+	return buildBootstrapJWTAuthenticator(
+		clusterName,
+		dsxIMDS.IssuerURL,
+		discoveryURL,
+		dsxIMDS.DiscoveryCA,
+		dsxIMDSBootstrapGroupExpression(dsxIMDS.OperatorTenant),
+	), nil
+}
+
+func dsxIMDSBootstrapGroupExpression(operatorTenant string) string {
+	subjectPrefix := strconv.Quote("spiffe://" + operatorTenant + ".")
+	// Any process on the host can ask IMDS for an audience-scoped token. Keep
+	// bootstrap RBAC narrow: only DSX bare-metal host identities for the
+	// configured operator tenant enter the node-bootstrapper group.
+	return fmt.Sprintf("claims.sub.startsWith(%s) && claims.sub.matches('^spiffe://[^/]+/bm/[^/]+$') ? ['nvke:node-bootstrapper'] : []", subjectPrefix)
 }
 
 // BuildOperatorJWTAuthenticator maps one validated operator provider to the

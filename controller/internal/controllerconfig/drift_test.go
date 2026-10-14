@@ -87,6 +87,7 @@ var stayEnv = map[string]string{
 	"SPIRE_AGENT_STARTUP_TIMEOUT":              chartUnset,
 	"SPIRE_AGENT_STARTUP_RETRY_INTERVAL":       chartUnset,
 	"SPIRE_SERVER_API_ADDRESS":                 chartUnset,
+	"WORKER_BOOTSTRAP_IDENTITY_SOURCE":         chartUnset,
 	"NODE_AGENT_PORT":                          chartUnset,
 	"MANAGED_BY_K8S_PLATFORM":                  chartUnset,
 	"LOCAL_DEV_FORCE_DOCKER_MACHINE_BOOTSTRAP": chartUnset,

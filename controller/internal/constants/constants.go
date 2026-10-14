@@ -108,6 +108,7 @@ const (
 	// controller starts managing DSX IMDS entries too, avoiding SSA ownership churn.
 	FieldManagerNicoSpiffe        = "nico-tpm-spiffe-controller"
 	FieldManagerMachineSpireEntry = "machine-spire-entry-controller"
+	FieldManagerMachineJoinSpire  = "machine-join-spire-entry-controller"
 
 	// Node annotations
 	NodeAnnotationKeyMachineHealthIssue = "nke.nvidia.com/machine-health-issue"

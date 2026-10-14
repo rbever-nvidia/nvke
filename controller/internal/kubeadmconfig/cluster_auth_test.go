@@ -59,6 +59,15 @@ func clusterAuthOperator() controllerconfig.OIDCProvider {
 	}
 }
 
+func clusterAuthDSXIMDS() config.DSXImdsConfig {
+	return config.DSXImdsConfig{
+		IssuerURL:      "https://imds.example.test",
+		DiscoveryURL:   "https://imds-discovery.example.test",
+		DiscoveryCA:    "imds CA",
+		OperatorTenant: "operator-tenant",
+	}
+}
+
 func nvkeRBAC(users ...string) *corev1.ConfigMap {
 	manifest := "kind: ClusterRoleBinding\nsubjects:\n"
 	for _, user := range users {
@@ -139,6 +148,39 @@ func TestBuildClusterAuthenticationConfig(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, got.JWT, 1)
 		assert.Equal(t, "https://login.example.test", got.JWT[0].Issuer.URL)
+	})
+
+	t.Run("IMDS source appends only the DSX IMDS bootstrap authenticator", func(t *testing.T) {
+		t.Parallel()
+		got, err := BuildClusterAuthenticationConfig(ctx, clusterAuthClient(clusterAuthCASecret()), ClusterAuthentication{
+			ClusterName:                   "tenant-1",
+			Shared:                        clusterAuthShared(),
+			SharedEnabled:                 true,
+			DSXIMDS:                       clusterAuthDSXIMDS(),
+			TrustDomain:                   clusterAuthTrustDomain,
+			WorkerBootstrapIdentitySource: config.WorkerBootstrapIdentitySourceIMDS,
+		})
+		require.NoError(t, err)
+		require.Len(t, got.JWT, 2)
+		assert.Empty(t, got.JWT[0].ClaimMappings.Groups.Expression)
+		assert.Equal(t, "https://imds.example.test", got.JWT[1].Issuer.URL)
+		assert.Contains(t, got.JWT[1].ClaimMappings.Groups.Expression, "/bm/")
+	})
+
+	t.Run("SPIRE source adds only the join bootstrap group to the shared authenticator", func(t *testing.T) {
+		t.Parallel()
+		got, err := BuildClusterAuthenticationConfig(ctx, clusterAuthClient(clusterAuthCASecret()), ClusterAuthentication{
+			ClusterName:                   "tenant-1",
+			Shared:                        clusterAuthShared(),
+			SharedEnabled:                 true,
+			DSXIMDS:                       clusterAuthDSXIMDS(),
+			TrustDomain:                   clusterAuthTrustDomain,
+			WorkerBootstrapIdentitySource: config.WorkerBootstrapIdentitySourceSPIRE,
+		})
+		require.NoError(t, err)
+		require.Len(t, got.JWT, 1)
+		assert.Equal(t, "https://management.example.test", got.JWT[0].Issuer.URL)
+		assert.Contains(t, got.JWT[0].ClaimMappings.Groups.Expression, "/kubeadm/join/")
 	})
 
 	t.Run("neither provider is an error", func(t *testing.T) {

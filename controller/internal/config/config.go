@@ -24,6 +24,9 @@ const (
 	SpireAttestationMethodJoinToken SpireAttestationMethod = "joinToken"
 	SpireAttestationMethodDSXIMDS   SpireAttestationMethod = "dsxImds"
 
+	WorkerBootstrapIdentitySourceIMDS  WorkerBootstrapIdentitySource = "imds"
+	WorkerBootstrapIdentitySourceSPIRE WorkerBootstrapIdentitySource = "spire"
+
 	NodeAgentExternalTLSCertPath = "/etc/nke/node-agent-client-tls/tls.crt"
 	NodeAgentExternalTLSKeyPath  = "/etc/nke/node-agent-client-tls/tls.key"
 	NodeAgentExternalTLSCAPath   = "/etc/nke/node-agent-client-tls/ca.crt"
@@ -39,6 +42,9 @@ const (
 
 // SpireAttestationMethod selects the SPIRE node attestation method pinned at node creation.
 type SpireAttestationMethod string
+
+// WorkerBootstrapIdentitySource selects how CABPK workers authenticate to the tenant API server during kubeadm discovery.
+type WorkerBootstrapIdentitySource string
 
 // DSXImdsConfig configures the external dsx_imds SPIRE node attestor and, for
 // the direct IMDS join POC, the tenant kube-apiserver JWT authenticator.
@@ -316,6 +322,9 @@ type Config struct {
 	// SpireJoinTokenTTL is the TTL used when creating SPIRE join tokens via the server API.
 	SpireJoinTokenTTL time.Duration `controllerconfig:"spire.joinTokenTTL"`
 
+	// WorkerBootstrapIdentitySource selects the identity source used by CABPK workers during kubeadm discovery.
+	WorkerBootstrapIdentitySource WorkerBootstrapIdentitySource `env:"WORKER_BOOTSTRAP_IDENTITY_SOURCE" default:"imds"`
+
 	NodeAgent NodeAgentConfig `envPrefix:"NODE_AGENT_"`
 
 	// NodeAgentExternalMTLSEnabled selects an externally issued client
@@ -541,6 +550,14 @@ func (c *Config) Validate() error {
 	}
 	if c.SpireServerAPIAddress == "" {
 		return fmt.Errorf("SPIRE_SERVER_API_ADDRESS is required")
+	}
+	switch c.WorkerBootstrapIdentitySource {
+	case WorkerBootstrapIdentitySourceIMDS, WorkerBootstrapIdentitySourceSPIRE:
+	default:
+		return fmt.Errorf("WORKER_BOOTSTRAP_IDENTITY_SOURCE must be one of imds or spire, got %q", c.WorkerBootstrapIdentitySource)
+	}
+	if c.WorkerBootstrapIdentitySource == WorkerBootstrapIdentitySourceSPIRE && !c.SpiffeEnabled {
+		return fmt.Errorf("spire.spiffeEnabled must be true when WORKER_BOOTSTRAP_IDENTITY_SOURCE=spire")
 	}
 	return nil
 }

@@ -25,17 +25,19 @@ func SupportsAuthenticationConfiguration(kubernetesVersion string) bool {
 
 // ClusterAuthentication is what a cluster's AuthenticationConfiguration is built from.
 type ClusterAuthentication struct {
-	ClusterName   string
-	Shared        config.NvkeOIDCAuth
-	SharedEnabled bool
-	DSXIMDS       config.DSXImdsConfig
-	Providers     []controllerconfig.OIDCProvider
-	TrustDomain   string
+	ClusterName                   string
+	Shared                        config.NvkeOIDCAuth
+	SharedEnabled                 bool
+	DSXIMDS                       config.DSXImdsConfig
+	Providers                     []controllerconfig.OIDCProvider
+	TrustDomain                   string
+	WorkerBootstrapIdentitySource config.WorkerBootstrapIdentitySource
 }
 
 // Needed reports whether the cluster has any OIDC provider.
 func (c ClusterAuthentication) Needed() bool {
-	return c.SharedEnabled || c.DSXIMDS.IssuerURL != "" || len(c.Providers) > 0
+	hasDSXIMDSBootstrap := c.workerBootstrapIdentitySource() == config.WorkerBootstrapIdentitySourceIMDS && c.DSXIMDS.IssuerURL != ""
+	return c.SharedEnabled || hasDSXIMDSBootstrap || len(c.Providers) > 0
 }
 
 // BuildClusterAuthenticationConfig builds a cluster's AuthenticationConfiguration.
@@ -43,7 +45,7 @@ func (c ClusterAuthentication) Needed() bool {
 // BuildOIDCAuthenticationConfig builds.
 func BuildClusterAuthenticationConfig(ctx context.Context, c client.Client, in ClusterAuthentication) (*OIDCAuthenticationConfig, error) {
 	if !in.Needed() {
-		return nil, errors.New("the cluster uses neither the shared OIDC provider nor fleet-wide providers")
+		return nil, errors.New("the cluster uses neither the shared OIDC provider, DSX IMDS, nor fleet-wide providers")
 	}
 
 	var caBundle []byte
@@ -60,11 +62,11 @@ func BuildClusterAuthenticationConfig(ctx context.Context, c client.Client, in C
 			if err != nil {
 				return nil, err
 			}
-			return appendDSXIMDSAuthenticator(authn, in.ClusterName, in.DSXIMDS)
+			return applyBootstrapAuthenticator(authn, in)
 		}
 	}
 	if !in.SharedEnabled && len(in.Providers) == 0 {
-		return appendDSXIMDSAuthenticator(&OIDCAuthenticationConfig{}, in.ClusterName, in.DSXIMDS)
+		return applyBootstrapAuthenticator(&OIDCAuthenticationConfig{}, in)
 	}
 
 	policy, err := LoadOperatorJWTPolicy(ctx, c, in.TrustDomain)
@@ -79,7 +81,29 @@ func BuildClusterAuthenticationConfig(ctx context.Context, c client.Client, in C
 	if err != nil {
 		return nil, err
 	}
-	return appendDSXIMDSAuthenticator(authn, in.ClusterName, in.DSXIMDS)
+	return applyBootstrapAuthenticator(authn, in)
+}
+
+func (c ClusterAuthentication) workerBootstrapIdentitySource() config.WorkerBootstrapIdentitySource {
+	if c.WorkerBootstrapIdentitySource == "" {
+		return config.WorkerBootstrapIdentitySourceIMDS
+	}
+	return c.WorkerBootstrapIdentitySource
+}
+
+func applyBootstrapAuthenticator(authn *OIDCAuthenticationConfig, in ClusterAuthentication) (*OIDCAuthenticationConfig, error) {
+	switch in.workerBootstrapIdentitySource() {
+	case config.WorkerBootstrapIdentitySourceIMDS:
+		return appendDSXIMDSAuthenticator(authn, in.ClusterName, in.DSXIMDS)
+	case config.WorkerBootstrapIdentitySourceSPIRE:
+		if !in.SharedEnabled {
+			return nil, errors.New("SPIRE worker bootstrap requires the shared OIDC provider")
+		}
+		authn.JWT[0].ClaimMappings.Groups.Expression = spireJoinBootstrapGroupExpression()
+		return authn, nil
+	default:
+		return nil, fmt.Errorf("unsupported worker bootstrap identity source %q", in.WorkerBootstrapIdentitySource)
+	}
 }
 
 // LoadOperatorJWTPolicy reserves the management SPIFFE trust domain and the User

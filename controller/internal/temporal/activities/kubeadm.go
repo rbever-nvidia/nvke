@@ -60,12 +60,13 @@ func toNodeAgentFiles(files []kubeadmconfig.File) []*nvkeproto.File {
 // clusterAuthentication uses the providers pinned on the cluster, never the live file.
 func (a *Activities) clusterAuthentication(cluster db.Cluster) kubeadmconfig.ClusterAuthentication {
 	return kubeadmconfig.ClusterAuthentication{
-		ClusterName:   cluster.Name,
-		Shared:        a.cfg.NvkeOIDCAuth,
-		SharedEnabled: cluster.OIDCAuthEnabled,
-		DSXIMDS:       a.cfg.NodeAgent.DSXImds,
-		Providers:     db.ClusterOIDCProvidersToConfig(cluster.OIDCProviders),
-		TrustDomain:   a.trustDomain,
+		ClusterName:                   cluster.Name,
+		Shared:                        a.cfg.NvkeOIDCAuth,
+		SharedEnabled:                 cluster.OIDCAuthEnabled,
+		DSXIMDS:                       a.cfg.NodeAgent.DSXImds,
+		Providers:                     db.ClusterOIDCProvidersToConfig(cluster.OIDCProviders),
+		TrustDomain:                   a.trustDomain,
+		WorkerBootstrapIdentitySource: a.cfg.WorkerBootstrapIdentitySource,
 	}
 }
 

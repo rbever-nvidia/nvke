@@ -46,6 +46,7 @@ const (
 
 	nodeBootstrapperGroup = "nvke:node-bootstrapper"
 	dsxIMDSBMPath         = "/bm/"
+	spireJoinPath         = "/kubeadm/join/"
 
 	approvalReason = "NVKEValidatedNodeIdentity"
 
@@ -65,8 +66,8 @@ type database interface {
 
 // Reconciler approves pending kubelet CSRs that match the node identity recorded
 // in the controller. Serving CSRs are checked against the controller database;
-// client CSRs in this POC are checked against the DSX IMDS subject and the
-// owned NICoMachine in the management cluster.
+// client CSRs in this POC are checked against the bootstrap identity source and
+// the corresponding Machine in the management cluster.
 type Reconciler struct {
 	clusterID  uuid.UUID
 	database   database
@@ -276,32 +277,14 @@ func planServingDecision(csr *certificatesv1.CertificateSigningRequest, nodes []
 	return newDecision(csr, nodeName, decisionApprove, "matches controller node identity")
 }
 
-// planClientDecision handles the kubelet client CSR created during kubeadm join.
-// The tenant API server has already authenticated the IMDS JWT, but approval
-// still binds the DSX bare-metal subject to exactly one expected worker
-// NicoMachine before granting a system:node client certificate.
 func planClientDecision(csr *certificatesv1.CertificateSigningRequest, machines *clusterv1.MachineList, nicoMachines *nicov1.NicoMachineList) csrDecision {
-	resourceID, ok := dsxIMDSResourceID(csr.Spec.Username)
-	if !ok {
-		return newDecision(csr, "", decisionSkip, "requestor is not a DSX IMDS bare-metal host identity")
-	}
 	if !slices.Contains(csr.Spec.Groups, nodeBootstrapperGroup) {
 		return newDecision(csr, "", decisionSkip, "spec.groups does not include nvke:node-bootstrapper")
 	}
 
-	var matched *clusterv1.Machine
-	for i := range machines.Items {
-		machine := &machines.Items[i]
-		if !machineMatchesDSXIMDSResource(machine, nicoMachines, resourceID) {
-			continue
-		}
-		if matched != nil {
-			return newDecision(csr, machine.Name, decisionSkip, "DSX IMDS identity matched multiple Machines")
-		}
-		matched = machine
-	}
-	if matched == nil {
-		return newDecision(csr, "", decisionSkip, "DSX IMDS identity does not match a CAPI Machine")
+	matched, ok, reason := matchClientCSRMachine(csr.Spec.Username, machines, nicoMachines)
+	if !ok {
+		return newDecision(csr, "", decisionSkip, reason)
 	}
 	if !matched.DeletionTimestamp.IsZero() {
 		return newDecision(csr, matched.Name, decisionSkip, "Machine is deleting")
@@ -315,7 +298,53 @@ func planClientDecision(csr *certificatesv1.CertificateSigningRequest, machines 
 	if reason := validateClientCSR(csr, matched.Name); reason != "" {
 		return newDecision(csr, matched.Name, decisionSkip, reason)
 	}
-	return newDecision(csr, matched.Name, decisionApprove, "matches CAPI Machine DSX IMDS identity")
+	return newDecision(csr, matched.Name, decisionApprove, reason)
+}
+
+func matchClientCSRMachine(username string, machines *clusterv1.MachineList, nicoMachines *nicov1.NicoMachineList) (*clusterv1.Machine, bool, string) {
+	if resourceID, ok := dsxIMDSResourceID(username); ok {
+		return matchDSXIMDSMachine(machines, nicoMachines, resourceID)
+	}
+	if machineUID, ok := spireJoinMachineUID(username); ok {
+		return matchSpireJoinMachine(machines, machineUID)
+	}
+	return nil, false, "requestor is not a supported NVKE bootstrap identity"
+}
+
+func matchDSXIMDSMachine(machines *clusterv1.MachineList, nicoMachines *nicov1.NicoMachineList, resourceID string) (*clusterv1.Machine, bool, string) {
+	var matched *clusterv1.Machine
+	for i := range machines.Items {
+		machine := &machines.Items[i]
+		if !machineMatchesDSXIMDSResource(machine, nicoMachines, resourceID) {
+			continue
+		}
+		if matched != nil {
+			return nil, false, "DSX IMDS identity matched multiple Machines"
+		}
+		matched = machine
+	}
+	if matched == nil {
+		return nil, false, "DSX IMDS identity does not match a CAPI Machine"
+	}
+	return matched, true, "matches CAPI Machine DSX IMDS identity"
+}
+
+func matchSpireJoinMachine(machines *clusterv1.MachineList, machineUID string) (*clusterv1.Machine, bool, string) {
+	var matched *clusterv1.Machine
+	for i := range machines.Items {
+		machine := &machines.Items[i]
+		if string(machine.UID) != machineUID {
+			continue
+		}
+		if matched != nil {
+			return nil, false, "SPIRE join identity matched multiple Machines"
+		}
+		matched = machine
+	}
+	if matched == nil {
+		return nil, false, "SPIRE join identity does not match a CAPI Machine"
+	}
+	return matched, true, "matches CAPI Machine SPIRE join identity"
 }
 
 func dsxIMDSResourceID(username string) (string, bool) {
@@ -325,6 +354,15 @@ func dsxIMDSResourceID(username string) (string, bool) {
 	}
 	resourceID := username[i+len(dsxIMDSBMPath):]
 	return resourceID, resourceID != "" && !strings.Contains(resourceID, "/")
+}
+
+func spireJoinMachineUID(username string) (string, bool) {
+	i := strings.LastIndex(username, spireJoinPath)
+	if i < 0 {
+		return "", false
+	}
+	machineUID := username[i+len(spireJoinPath):]
+	return machineUID, machineUID != "" && !strings.Contains(machineUID, "/")
 }
 
 func machineMatchesDSXIMDSResource(machine *clusterv1.Machine, nicoMachines *nicov1.NicoMachineList, resourceID string) bool {
