@@ -292,7 +292,7 @@ func BuildDSXIMDSJWTAuthenticator(clusterName string, dsxIMDS config.DSXImdsConf
 			// Keep bootstrap RBAC narrow: only DSX bare-metal host identities for
 			// the configured operator tenant enter the node-bootstrapper group.
 			Groups: apiserverv1.PrefixedClaimOrExpression{
-				Expression: fmt.Sprintf("claims.sub.startsWith(%s) && claims.sub.matches('^spiffe://[^/]+/bm/[^/]+$') ? ['nke:node-bootstrapper'] : []", subjectPrefix),
+				Expression: fmt.Sprintf("claims.sub.startsWith(%s) && claims.sub.matches('^spiffe://[^/]+/bm/[^/]+$') ? ['nvke:node-bootstrapper'] : []", subjectPrefix),
 			},
 		},
 	}, nil

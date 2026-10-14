@@ -44,10 +44,10 @@ const (
 	nodeUsernamePrefix = "system:node:"
 	nodeGroup          = "system:nodes"
 
-	nodeBootstrapperGroup = "nke:node-bootstrapper"
+	nodeBootstrapperGroup = "nvke:node-bootstrapper"
 	dsxIMDSBMPath         = "/bm/"
 
-	approvalReason = "NKEValidatedNodeIdentity"
+	approvalReason = "NVKEValidatedNodeIdentity"
 
 	unsupportedSANReason = "subject alternative names contain an unsupported identity"
 
@@ -286,7 +286,7 @@ func planClientDecision(csr *certificatesv1.CertificateSigningRequest, machines 
 		return newDecision(csr, "", decisionSkip, "requestor is not a DSX IMDS bare-metal host identity")
 	}
 	if !slices.Contains(csr.Spec.Groups, nodeBootstrapperGroup) {
-		return newDecision(csr, "", decisionSkip, "spec.groups does not include nke:node-bootstrapper")
+		return newDecision(csr, "", decisionSkip, "spec.groups does not include nvke:node-bootstrapper")
 	}
 
 	var matched *clusterv1.Machine

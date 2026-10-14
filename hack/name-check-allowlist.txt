@@ -77,12 +77,11 @@ token:(^|[./])nke\.nvidia\.com|\.labels\.nke$
 
 # The NKECluster, NKENodePool and nkeClusterRef names of the DGXC platform API
 # (compute.private.x-dgxc.nvidia.com), which this repository emits CRs for in
-# controller/scripts/cwe-to-platform-crs.sh but does not own; the NKECluster
-# shape the name-check self-test feeds its own detector (hack/test_name_check.py);
-# and the CSR approval reason recorded on the tenant clusters of existing sites.
+# controller/scripts/cwe-to-platform-crs.sh but does not own, and the NKECluster
+# shape the name-check self-test feeds its own detector (hack/test_name_check.py).
 # The management-engine kind and its plural are now NVKECluster and nvkeclusters
 # and no longer need this entry.
-token:NKECluster|nkecluster|NKENodePool|nkenodepool|nkeClusterRef|NKEValidatedNodeIdentity
+token:NKECluster|nkecluster|NKENodePool|nkenodepool|nkeClusterRef
 
 # The nke-rbac ConfigMap, the nke: ClusterRole prefix the tenant apiserver
 # reserves, and the legacy filenames in controller/internal/nvkerbac/.

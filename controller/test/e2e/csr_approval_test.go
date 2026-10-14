@@ -23,7 +23,7 @@ const (
 	kubeletPKIHostPath          = "/var/lib/kubelet/pki"
 	kubeletConfigHostPath       = "/var/lib/kubelet/config.yaml"
 	kubeletServingCurrentCert   = kubeletPKIHostPath + "/kubelet-server-current.pem"
-	kubeletCSRApprovalReason    = "NKEValidatedNodeIdentity"
+	kubeletCSRApprovalReason    = "NVKEValidatedNodeIdentity"
 	kubeletCSRRotationContainer = "rotate-kubelet-serving-certificate"
 )
 
