@@ -114,19 +114,10 @@ func (c *NicoSpiffeController) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 	hostID := machine.GetAnnotations()[constants.MachineAnnotationKeyHostID]
-	if hostID == "" {
-		logger.Debug("Machine has no host-id annotation, skipping SPIRE agent path reconciliation")
-		return ctrl.Result{}, nil
-	}
-	nodeID, err := uuid.Parse(hostID)
+	method, err := c.spireAttestationMethod(ctx, machine, hostID)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("invalid host ID %q on Machine %s/%s: %w", hostID, machine.Namespace, machine.Name, err)
+		return ctrl.Result{}, err
 	}
-	node, err := c.nodes.GetNode(ctx, nodeID)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("get node %s for Machine %s/%s: %w", nodeID, machine.Namespace, machine.Name, err)
-	}
-	method := node.SpireAttestationMethod
 	spireAgentSpiffeIDPath, expectedPathPrefix := c.spireAgentSpiffeIDPath(nicoMachine, method)
 	if spireAgentSpiffeIDPath == "" {
 		if method == db.SpireAttestationMethodJoinToken {
@@ -162,6 +153,21 @@ func (c *NicoSpiffeController) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (c *NicoSpiffeController) spireAttestationMethod(ctx context.Context, machine *clusterv1.Machine, hostID string) (db.SpireAttestationMethod, error) {
+	if hostID == "" {
+		return db.SpireAttestationMethod(c.cfg.NodeAgent.SpireAttestationMethod), nil
+	}
+	nodeID, err := uuid.Parse(hostID)
+	if err != nil {
+		return "", fmt.Errorf("invalid host ID %q on Machine %s/%s: %w", hostID, machine.Namespace, machine.Name, err)
+	}
+	node, err := c.nodes.GetNode(ctx, nodeID)
+	if err != nil {
+		return "", fmt.Errorf("get node %s for Machine %s/%s: %w", nodeID, machine.Namespace, machine.Name, err)
+	}
+	return node.SpireAttestationMethod, nil
 }
 
 func (c *NicoSpiffeController) spireAgentSpiffeIDPath(nicoMachine *nicov1.NicoMachine, method db.SpireAttestationMethod) (string, string) {

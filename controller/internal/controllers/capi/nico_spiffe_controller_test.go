@@ -86,11 +86,12 @@ func TestUnit_NicoSpiffeControllerReconcile(t *testing.T) {
 			ownerRef: true,
 			deleting: true,
 		},
-		"skips a Machine without a host ID": {
+		"uses configured attestation method for a Machine without a host ID": {
 			method:        db.SpireAttestationMethodTPM,
 			status:        nicov1.NicoMachineStatus{TpmEkPubHash: "hash-current"},
 			ownerRef:      true,
 			missingHostID: true,
+			wantPath:      constants.TPMSpireAgentPath + "hash-current",
 		},
 		"rejects an invalid host ID": {
 			method:        db.SpireAttestationMethodTPM,
@@ -256,6 +257,9 @@ func TestUnit_NicoSpiffeControllerReconcileAfterMachineHostIDAdded(t *testing.T)
 
 	updated := &clusterv1.Machine{}
 	require.NoError(t, controller.k8sClient.Get(t.Context(), client.ObjectKeyFromObject(machine), updated))
+	require.Equal(t, constants.TPMSpireAgentPath+"hash-current",
+		updated.Annotations[constants.MachineAnnotationKeySpireAgentSpiffeIDPath])
+
 	updated.Annotations = map[string]string{constants.MachineAnnotationKeyHostID: nicoSpiffeTestHostID}
 	require.NoError(t, controller.k8sClient.Update(t.Context(), updated))
 	require.True(t, machineHostIDWatchPredicate().Update(event.UpdateEvent{ObjectOld: machine, ObjectNew: updated}))

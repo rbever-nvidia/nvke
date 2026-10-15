@@ -87,17 +87,17 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 func (c *Controller) reconcileTpmPubhashesCm(ctx context.Context) error {
-	// List ClusterStaticEntries managed by the controller's machine-spire-entry-controller.
 	clusterStaticEntries := &spirev1alpha1.ClusterStaticEntryList{}
-	err := c.k8sClient.List(ctx, clusterStaticEntries, client.MatchingLabels{
-		constants.LabelKeyNvkeManagedBy: constants.FieldManagerMachineSpireEntry,
-	})
+	err := c.k8sClient.List(ctx, clusterStaticEntries)
 	if err != nil {
 		return fmt.Errorf("failed to list cluster static entries: %w", err)
 	}
 
 	desiredPubHashes := make(map[string]struct{})
 	for _, clusterStaticEntry := range clusterStaticEntries.Items {
+		if !isManagedSpireEntry(clusterStaticEntry.Labels[constants.LabelKeyNvkeManagedBy]) {
+			continue
+		}
 		// Only process entries for our SPIRE installation.
 		if clusterStaticEntry.Spec.ClassName != c.cfg.SpireClassName {
 			continue
@@ -142,6 +142,10 @@ func (c *Controller) reconcileTpmPubhashesCm(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func isManagedSpireEntry(manager string) bool {
+	return manager == constants.FieldManagerMachineSpireEntry || manager == constants.FieldManagerMachineJoinSpire
 }
 
 func extractTPMPubHash(parentID string) string {

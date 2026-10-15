@@ -33,6 +33,7 @@ func TestController_ReconcileRendersManagedClusterStaticEntries(t *testing.T) {
 	controller := newControllerForTest(t,
 		newTPMClusterStaticEntryForTest("host-a", constants.FieldManagerMachineSpireEntry, "hash-a"),
 		newTPMClusterStaticEntryForTest("host-b", constants.FieldManagerMachineSpireEntry, "hash-b"),
+		newTPMClusterStaticEntryForTest("join-c", constants.FieldManagerMachineJoinSpire, "hash-c"),
 	)
 
 	_, err := controller.Reconcile(context.Background(), ctrl.Request{})
@@ -41,6 +42,7 @@ func TestController_ReconcileRendersManagedClusterStaticEntries(t *testing.T) {
 	assertTPMPubhashesConfigMapData(t, controller, map[string]string{
 		"hash-a": constants.LabelKeyNvkeManagedBy + "=" + constants.FieldManagerMachineSpireEntry,
 		"hash-b": constants.LabelKeyNvkeManagedBy + "=" + constants.FieldManagerMachineSpireEntry,
+		"hash-c": constants.LabelKeyNvkeManagedBy + "=" + constants.FieldManagerMachineSpireEntry,
 	})
 }
 
