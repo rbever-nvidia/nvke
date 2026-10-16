@@ -1,0 +1,176 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: NicoMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-worker-spire-infra
+  namespace: nke-system
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+spec:
+  template:
+    spec:
+      cloudInitInjectHostname: true
+      instanceTypeID: ${INSTANCE_TYPE_ID}
+      interfaces:
+        - vpcPrefixID: ${VPC_PREFIX_ID}
+      ipxeScript: |
+        #!ipxe
+        set boot-loader ${IPXE_BOOT_LOADER}
+        set image-url ${IPXE_IMAGE_URL}
+        set disk-strategy ${DISK_STRATEGY}
+
+        set console-config console=tty0 console=ttyS1,115200
+        set kernel-params pci=realloc=off reboot=pci loglevel=1 iommu=pt intel_iommu=on
+        set luks-key luks.key=changeit
+        set cloud-init-ds ds=nocloud-net;s=${cloudinit-url}
+
+        chain ${boot-loader} ${console-config} ${kernel-params} ${luks-key} image_url=${image-url} disk_strategy=${disk-strategy} ${cloud-init-ds} update_grub_template=yes update_grub_cfg=yes
+        boot
+      labels:
+        nke.nvidia.com/cluster-id: ${CLUSTER_ID}
+        nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+      vpcID: ${VPC_ID}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-worker-spire-bootstrap
+  namespace: nke-system
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+spec:
+  template:
+    spec:
+      files:
+        - content: |
+            apiVersion: kubelet.config.k8s.io/v1beta1
+            kind: KubeletConfiguration
+            kubeReserved:
+              cpu: "1000m"
+              memory: "2Gi"
+              ephemeral-storage: "1Gi"
+            systemReserved:
+              memory: "1Gi"
+          owner: root:root
+          path: /etc/kubernetes/patches/kubeletconfiguration0+merge.yaml
+          permissions: "0644"
+        - content: |
+            agent {
+                data_dir = "/var/lib/spire-agent"
+                log_level = "DEBUG"
+
+                server_address = "${SPIRE_SERVER_ADDRESS}"
+                server_port = "${SPIRE_SERVER_PORT}"
+                trust_domain = "${SPIRE_TRUST_DOMAIN}"
+                trust_bundle_path = "/etc/spire-agent/initial-trust-bundle.pem"
+            }
+
+            plugins {
+                KeyManager "disk" {
+                    plugin_data {
+                        directory = "/var/lib/spire-agent"
+                    }
+                }
+
+                NodeAttestor "tpm" {
+                    plugin_cmd = "/usr/local/lib/spire-agent/tpm_attestor_agent"
+                    plugin_checksum = "${TPM_PLUGIN_CHECKSUM}"
+                    plugin_data {}
+                }
+
+                WorkloadAttestor "unix" {
+                    plugin_data {
+                        discover_workload_path = true
+                    }
+                }
+            }
+          owner: root:root
+          path: /etc/spire-agent/agent.conf
+          permissions: "0644"
+        - content: |
+            [Service]
+            AmbientCapabilities=CAP_SYS_PTRACE
+            CapabilityBoundingSet=CAP_SYS_PTRACE
+          owner: root:root
+          path: /etc/systemd/system/spire-agent.service.d/10-workload-path.conf
+          permissions: "0644"
+      joinConfiguration:
+        discovery:
+          file:
+            kubeConfig:
+              user:
+                exec:
+                  apiVersion: client.authentication.k8s.io/v1
+                  command: /opt/spiffe/bin/k8s-spiffe-workload-jwt-exec-auth
+                  env:
+                    - name: SPIFFE_ENDPOINT_SOCKET
+                      value: unix:///tmp/spire-agent/public/api.sock
+                    - name: SPIFFE_JWT_AUDIENCE
+                      value: ${CLUSTER_NAME}
+                    - name: SPIFFE_JWT_HINT
+                      value: kubeadm-join
+            kubeConfigPath: /run/nke/capi-discovery-kubeconfig
+        nodeRegistration:
+          criSocket: unix:///var/run/containerd/containerd.sock
+          taints:
+            - effect: NoSchedule
+              key: nke.nvidia.com/provisioning
+              value: "true"
+        patches:
+          directory: /etc/kubernetes/patches
+      preKubeadmCommands:
+        - DEBIAN_FRONTEND=noninteractive apt-get purge -y nke-agent
+        - sed -i 's#nke-prod-assets.s3.us-west-2.amazonaws.com#d1veq6e8nuk2fy.cloudfront.net#' /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+        - printf 'deb [trusted=yes] ${OPENVSWITCH_SETUP_APT_URL} ./\n' > /etc/apt/sources.list.d/nke-openvswitch-setup.list
+        - apt-get update
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y nke-openvswitch-setup
+        - mkdir -p /opt/spiffe/bin /tmp/spiffe-exec-auth /etc/spire-agent
+        - curl -fsSL "${SPIFFE_EXEC_AUTH_URL}" -o /tmp/spiffe-exec-auth/k8s-spiffe-workload-jwt-exec-auth.tar.gz
+        - printf '${SPIFFE_EXEC_AUTH_SHA256}  /tmp/spiffe-exec-auth/k8s-spiffe-workload-jwt-exec-auth.tar.gz\n' | sha256sum -c -
+        - tar -xzf /tmp/spiffe-exec-auth/k8s-spiffe-workload-jwt-exec-auth.tar.gz -C /tmp/spiffe-exec-auth
+        - install -m 0755 /tmp/spiffe-exec-auth/k8s-spiffe-workload-jwt-exec-auth /opt/spiffe/bin/k8s-spiffe-workload-jwt-exec-auth
+        - printf '%s' '${SPIRE_TRUST_BUNDLE_B64}' | base64 -d > /etc/spire-agent/initial-trust-bundle.pem
+        - apt-get update
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y spire-agent
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y nke-kubeadm-distro-${KUBERNETES_PACKAGE_VERSION}
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y nke-cni-ovn-images-${CNI_OVN_VERSION}
+        - systemctl daemon-reload
+        - systemctl restart spire-agent.service
+        - configure-openvswitch
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ${CLUSTER_NAME}-worker-spire
+  namespace: nke-system
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 1
+  rollout:
+    strategy:
+      type: OnDelete
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+      nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+        nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+    spec:
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: ${CLUSTER_NAME}-worker-spire-bootstrap
+      clusterName: ${CLUSTER_NAME}
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: NicoMachineTemplate
+        name: ${CLUSTER_NAME}-worker-spire-infra
+      version: ${KUBERNETES_VERSION}

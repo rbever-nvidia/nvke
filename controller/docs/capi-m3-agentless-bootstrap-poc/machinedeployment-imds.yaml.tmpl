@@ -1,0 +1,131 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: NicoMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-worker-imds-infra
+  namespace: nke-system
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+spec:
+  template:
+    spec:
+      cloudInitInjectHostname: true
+      instanceTypeID: ${INSTANCE_TYPE_ID}
+      interfaces:
+        - vpcPrefixID: ${VPC_PREFIX_ID}
+      ipxeScript: |
+        #!ipxe
+        set boot-loader ${IPXE_BOOT_LOADER}
+        set image-url ${IPXE_IMAGE_URL}
+        set disk-strategy ${DISK_STRATEGY}
+
+        set console-config console=tty0 console=ttyS1,115200
+        set kernel-params pci=realloc=off reboot=pci loglevel=1 iommu=pt intel_iommu=on
+        set luks-key luks.key=changeit
+        set cloud-init-ds ds=nocloud-net;s=${cloudinit-url}
+
+        chain ${boot-loader} ${console-config} ${kernel-params} ${luks-key} image_url=${image-url} disk_strategy=${disk-strategy} ${cloud-init-ds} update_grub_template=yes update_grub_cfg=yes
+        boot
+      labels:
+        nke.nvidia.com/cluster-id: ${CLUSTER_ID}
+        nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+      vpcID: ${VPC_ID}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-worker-imds-bootstrap
+  namespace: nke-system
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+spec:
+  template:
+    spec:
+      files:
+        - content: |
+            apiVersion: kubelet.config.k8s.io/v1beta1
+            kind: KubeletConfiguration
+            kubeReserved:
+              cpu: "1000m"
+              memory: "2Gi"
+              ephemeral-storage: "1Gi"
+            systemReserved:
+              memory: "1Gi"
+          owner: root:root
+          path: /etc/kubernetes/patches/kubeletconfiguration0+merge.yaml
+          permissions: "0644"
+      joinConfiguration:
+        discovery:
+          file:
+            kubeConfig:
+              user:
+                exec:
+                  apiVersion: client.authentication.k8s.io/v1
+                  command: /opt/nke/bin/imds-jwt-exec-auth
+                  env:
+                    - name: IMDS_ENDPOINT
+                      value: ${IMDS_ENDPOINT}
+                    - name: IMDS_ALLOW_NON_LINK_LOCAL
+                      value: "true"
+                    - name: IMDS_JWT_AUDIENCE
+                      value: ${CLUSTER_NAME}
+            kubeConfigPath: /run/nke/capi-discovery-kubeconfig
+        nodeRegistration:
+          criSocket: unix:///var/run/containerd/containerd.sock
+          taints:
+            - effect: NoSchedule
+              key: nke.nvidia.com/provisioning
+              value: "true"
+        patches:
+          directory: /etc/kubernetes/patches
+      preKubeadmCommands:
+        - DEBIAN_FRONTEND=noninteractive apt-get purge -y nke-agent
+        - sed -i 's#nke-prod-assets.s3.us-west-2.amazonaws.com#d1veq6e8nuk2fy.cloudfront.net#' /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+        - printf 'deb [trusted=yes] ${OPENVSWITCH_SETUP_APT_URL} ./\n' > /etc/apt/sources.list.d/nke-openvswitch-setup.list
+        - apt-get update
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y nke-openvswitch-setup
+        - mkdir -p /opt/nke/bin /tmp/imds-exec-auth
+        - curl -fsSL "${IMDS_EXEC_AUTH_URL}" -o /tmp/imds-exec-auth/imds-jwt-exec-auth
+        - printf '${IMDS_EXEC_AUTH_SHA256}  /tmp/imds-exec-auth/imds-jwt-exec-auth\n' | sha256sum -c -
+        - install -m 0755 /tmp/imds-exec-auth/imds-jwt-exec-auth /opt/nke/bin/imds-jwt-exec-auth
+        - apt-get update
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y nke-kubeadm-distro-${KUBERNETES_PACKAGE_VERSION}
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y nke-cni-ovn-images-${CNI_OVN_VERSION}
+        - configure-openvswitch
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ${CLUSTER_NAME}-worker-imds
+  namespace: nke-system
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 1
+  rollout:
+    strategy:
+      type: OnDelete
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+      nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+        nke.nvidia.com/node-pool-id: ${NODE_POOL_ID}
+    spec:
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: ${CLUSTER_NAME}-worker-imds-bootstrap
+      clusterName: ${CLUSTER_NAME}
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: NicoMachineTemplate
+        name: ${CLUSTER_NAME}-worker-imds-infra
+      version: ${KUBERNETES_VERSION}
