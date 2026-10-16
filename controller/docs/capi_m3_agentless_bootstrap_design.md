@@ -319,6 +319,21 @@ testing shows that frequent subject-list updates are a problem. Keep
 subject-pattern group RBAC as the fallback because it avoids per-Machine RBAC
 writes at the cost of broader bootstrap authorization.
 
+The hard list-size limit is high because the exact subjects exist only while a
+Machine is joining. These estimates use compact JSON for one RBAC object and
+therefore measure concurrent unjoined workers, not total cluster size:
+
+| Subject shape | Subject length | Bytes per subject per RBAC object | Max at 1.5 MiB |
+|---|---:|---:|---:|
+| SPIRE `kubeadm/join/<uuid>` | 77 | 141 | ~11,150 |
+| IMDS short subject | 82 | 146 | ~10,770 |
+| IMDS 120-character subject | 122 | 186 | ~8,450 |
+| IMDS 200-character subject | 202 | 266 | ~5,900 |
+
+The practical limit may be lower because each join and cleanup patches four
+RBAC objects. Large bursts can hit API churn or patch-conflict behavior before
+the object-size ceiling.
+
 ### Client CSR Approval
 
 Authentication of the discovery JWT and exact bootstrap RBAC are not approval
