@@ -99,7 +99,6 @@ func applyBootstrapAuthenticator(authn *OIDCAuthenticationConfig, in ClusterAuth
 		if !in.SharedEnabled {
 			return nil, errors.New("SPIRE worker bootstrap requires the shared OIDC provider")
 		}
-		authn.JWT[0].ClaimMappings.Groups.Expression = spireJoinBootstrapGroupExpression()
 		return authn, nil
 	default:
 		return nil, fmt.Errorf("unsupported worker bootstrap identity source %q", in.WorkerBootstrapIdentitySource)

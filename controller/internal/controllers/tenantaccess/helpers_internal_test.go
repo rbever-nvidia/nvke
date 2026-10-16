@@ -236,3 +236,68 @@ func TestPruneLegacyRBAC(t *testing.T) {
 		require.True(t, apierrors.IsNotFound(err))
 	})
 }
+
+func TestPruneLegacyBootstrapGroupSubjects(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	exactSubject := rbacv1.Subject{
+		Kind:     rbacv1.UserKind,
+		APIGroup: rbacv1.GroupName,
+		Name:     "spiffe://cwe-capi.nke.local/kubeadm/join/machine-uid",
+	}
+	legacySubject := rbacv1.Subject{
+		Kind:     rbacv1.GroupKind,
+		APIGroup: rbacv1.GroupName,
+		Name:     legacyBootstrapGroupName,
+	}
+	unrelatedGroup := rbacv1.Subject{
+		Kind:     rbacv1.GroupKind,
+		APIGroup: rbacv1.GroupName,
+		Name:     "system:bootstrappers",
+	}
+	objects := []ctrlclient.Object{
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "nvke:node-bootstrapper"},
+			Subjects:   []rbacv1.Subject{legacySubject, exactSubject},
+		},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "nvke:node-bootstrapper:get-nodes"},
+			Subjects:   []rbacv1.Subject{exactSubject, legacySubject},
+		},
+		&rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "nvke:node-bootstrapper:kubelet-config", Namespace: "kube-system"},
+			Subjects:   []rbacv1.Subject{legacySubject, exactSubject},
+		},
+		&rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "nvke:node-bootstrapper:nodes-kubeadm-config", Namespace: "kube-system"},
+			Subjects:   []rbacv1.Subject{legacySubject, exactSubject},
+		},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated"},
+			Subjects:   []rbacv1.Subject{legacySubject, unrelatedGroup},
+		},
+	}
+	c := crfake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(objects...).Build()
+
+	require.NoError(t, pruneLegacyBootstrapGroupSubjects(ctx, c))
+	require.NoError(t, pruneLegacyBootstrapGroupSubjects(ctx, c))
+
+	for _, ref := range bootstrapBindingsWithLegacyGroup() {
+		var subjects []rbacv1.Subject
+		if ref.cluster {
+			binding := &rbacv1.ClusterRoleBinding{}
+			require.NoError(t, c.Get(ctx, ctrlclient.ObjectKey{Name: ref.name}, binding))
+			subjects = binding.Subjects
+		} else {
+			binding := &rbacv1.RoleBinding{}
+			require.NoError(t, c.Get(ctx, ctrlclient.ObjectKey{Namespace: ref.namespace, Name: ref.name}, binding))
+			subjects = binding.Subjects
+		}
+		assert.Equal(t, []rbacv1.Subject{exactSubject}, subjects)
+	}
+
+	unrelated := &rbacv1.ClusterRoleBinding{}
+	require.NoError(t, c.Get(ctx, ctrlclient.ObjectKey{Name: "unrelated"}, unrelated))
+	assert.Equal(t, []rbacv1.Subject{legacySubject, unrelatedGroup}, unrelated.Subjects)
+}

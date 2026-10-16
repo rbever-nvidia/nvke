@@ -243,6 +243,55 @@ func TestPlanDecision(t *testing.T) {
 	})
 }
 
+func TestPlanClientDecisionUsesExactBootstrapUsername(t *testing.T) {
+	t.Parallel()
+
+	machine := clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-1",
+			UID:  types.UID("machine-uid"),
+		},
+	}
+	machines := &clusterv1.MachineList{Items: []clusterv1.Machine{machine}}
+
+	t.Run("SPIRE join username is approved without bootstrap group", func(t *testing.T) {
+		t.Parallel()
+		csr := newClientCSR(t, "worker-1-client", time.Now(), "spiffe://test.example/kubeadm/join/machine-uid", "worker-1")
+		decision := planClientDecision(csr, machines, &nicov1.NicoMachineList{})
+		require.Equal(t, decisionApprove, decision.Action)
+		require.Equal(t, "worker-1", decision.NodeName)
+	})
+
+	t.Run("DSX IMDS username is approved without bootstrap group", func(t *testing.T) {
+		t.Parallel()
+		nicoMachines := &nicov1.NicoMachineList{Items: []nicov1.NicoMachine{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion: clusterv1.GroupVersion.String(),
+						Kind:       "Machine",
+						Name:       machine.Name,
+						UID:        machine.UID,
+					}},
+				},
+				Status: nicov1.NicoMachineStatus{PrimaryDPUMachineID: "host-abc123"},
+			},
+		}}
+		csr := newClientCSR(t, "worker-1-client", time.Now(), "spiffe://operator-1.ds9.dsx.nvid.id/bm/host-abc123", "worker-1")
+		decision := planClientDecision(csr, machines, nicoMachines)
+		require.Equal(t, decisionApprove, decision.Action)
+		require.Equal(t, "worker-1", decision.NodeName)
+	})
+
+	t.Run("wrong bootstrap username is skipped", func(t *testing.T) {
+		t.Parallel()
+		csr := newClientCSR(t, "worker-1-client", time.Now(), "spiffe://test.example/kubeadm/join/other-machine", "worker-1")
+		decision := planClientDecision(csr, machines, &nicov1.NicoMachineList{})
+		require.Equal(t, decisionSkip, decision.Action)
+		require.Equal(t, "SPIRE join identity does not match a CAPI Machine", decision.Reason)
+	})
+}
+
 func TestLogDecisionUsesDecisionLevel(t *testing.T) {
 	tests := map[string]struct {
 		action    string
@@ -562,6 +611,23 @@ func newServingCSR(
 			},
 			Username: nodeUsernamePrefix + "worker-1",
 			Groups:   []string{nodeGroup},
+		},
+	}
+}
+
+func newClientCSR(t *testing.T, name string, createdAt time.Time, username string, nodeName string) *certificatesv1.CertificateSigningRequest {
+	t.Helper()
+	return &certificatesv1.CertificateSigningRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(createdAt)},
+		Spec: certificatesv1.CertificateSigningRequestSpec{
+			Request:    createCertificateRequest(t, nodeUsernamePrefix+nodeName, []string{nodeGroup}, nil, nil, nil),
+			SignerName: certificatesv1.KubeAPIServerClientKubeletSignerName,
+			Usages: []certificatesv1.KeyUsage{
+				certificatesv1.UsageDigitalSignature,
+				certificatesv1.UsageKeyEncipherment,
+				certificatesv1.UsageClientAuth,
+			},
+			Username: username,
 		},
 	}
 }

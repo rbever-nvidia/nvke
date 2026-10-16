@@ -388,6 +388,9 @@ func (c *Controller) applyRBAC(ctx context.Context, cluster db.Cluster, adminCon
 	if err := pruneLegacyRBAC(ctx, tenantClient, manifest); err != nil {
 		return fmt.Errorf("pruning legacy NVKE RBAC from cluster %s: %w", cluster.Name, err)
 	}
+	if err := pruneLegacyBootstrapGroupSubjects(ctx, tenantClient); err != nil {
+		return fmt.Errorf("pruning legacy bootstrap RBAC subjects from cluster %s: %w", cluster.Name, err)
+	}
 
 	return nil
 }

@@ -150,7 +150,7 @@ func TestBuildClusterAuthenticationConfig(t *testing.T) {
 		assert.Equal(t, "https://login.example.test", got.JWT[0].Issuer.URL)
 	})
 
-	t.Run("IMDS source appends only the DSX IMDS bootstrap authenticator", func(t *testing.T) {
+	t.Run("IMDS source appends the DSX IMDS bootstrap authenticator without bootstrap groups", func(t *testing.T) {
 		t.Parallel()
 		got, err := BuildClusterAuthenticationConfig(ctx, clusterAuthClient(clusterAuthCASecret()), ClusterAuthentication{
 			ClusterName:                   "tenant-1",
@@ -164,10 +164,10 @@ func TestBuildClusterAuthenticationConfig(t *testing.T) {
 		require.Len(t, got.JWT, 2)
 		assert.Empty(t, got.JWT[0].ClaimMappings.Groups.Expression)
 		assert.Equal(t, "https://imds.example.test", got.JWT[1].Issuer.URL)
-		assert.Contains(t, got.JWT[1].ClaimMappings.Groups.Expression, "/bm/")
+		assert.Empty(t, got.JWT[1].ClaimMappings.Groups.Expression)
 	})
 
-	t.Run("SPIRE source adds only the join bootstrap group to the shared authenticator", func(t *testing.T) {
+	t.Run("SPIRE source keeps the shared authenticator without bootstrap groups", func(t *testing.T) {
 		t.Parallel()
 		got, err := BuildClusterAuthenticationConfig(ctx, clusterAuthClient(clusterAuthCASecret()), ClusterAuthentication{
 			ClusterName:                   "tenant-1",
@@ -180,7 +180,7 @@ func TestBuildClusterAuthenticationConfig(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, got.JWT, 1)
 		assert.Equal(t, "https://management.example.test", got.JWT[0].Issuer.URL)
-		assert.Contains(t, got.JWT[0].ClaimMappings.Groups.Expression, "/kubeadm/join/")
+		assert.Empty(t, got.JWT[0].ClaimMappings.Groups.Expression)
 	})
 
 	t.Run("neither provider is an error", func(t *testing.T) {

@@ -44,9 +44,8 @@ const (
 	nodeUsernamePrefix = "system:node:"
 	nodeGroup          = "system:nodes"
 
-	nodeBootstrapperGroup = "nvke:node-bootstrapper"
-	dsxIMDSBMPath         = "/bm/"
-	spireJoinPath         = "/kubeadm/join/"
+	dsxIMDSBMPath = "/bm/"
+	spireJoinPath = "/kubeadm/join/"
 
 	approvalReason = "NVKEValidatedNodeIdentity"
 
@@ -278,10 +277,6 @@ func planServingDecision(csr *certificatesv1.CertificateSigningRequest, nodes []
 }
 
 func planClientDecision(csr *certificatesv1.CertificateSigningRequest, machines *clusterv1.MachineList, nicoMachines *nicov1.NicoMachineList) csrDecision {
-	if !slices.Contains(csr.Spec.Groups, nodeBootstrapperGroup) {
-		return newDecision(csr, "", decisionSkip, "spec.groups does not include nvke:node-bootstrapper")
-	}
-
 	matched, ok, reason := matchClientCSRMachine(csr.Spec.Username, machines, nicoMachines)
 	if !ok {
 		return newDecision(csr, "", decisionSkip, reason)

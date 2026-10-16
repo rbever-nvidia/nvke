@@ -35,6 +35,8 @@ The templates assume:
   `Cluster.spec.controlPlaneEndpoint`.
 - The controller is configured for the matching worker bootstrap identity source.
 - Required POC artifacts are reachable from the worker during cloud-init.
+- The `nke-system/spire-agent-initial-trust-bundle` Secret exists with the
+  current SPIRE server trust bundle in `bundle.pem`.
 
 Do not put real credentials, tokens, kubeconfigs, or certificates in these
 templates. Use placeholders or externally managed test secrets.

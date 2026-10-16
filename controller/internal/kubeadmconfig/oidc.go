@@ -265,10 +265,6 @@ func buildBootstrapJWTAuthenticator(
 	return authenticator
 }
 
-func spireJoinBootstrapGroupExpression() string {
-	return "claims.sub.matches('^spiffe://[^/]+/kubeadm/join/.+') ? ['nvke:node-bootstrapper'] : []"
-}
-
 func appendDSXIMDSAuthenticator(authConfig *OIDCAuthenticationConfig, clusterName string, dsxIMDS config.DSXImdsConfig) (*OIDCAuthenticationConfig, error) {
 	if dsxIMDS.IssuerURL == "" {
 		return authConfig, nil
@@ -305,16 +301,8 @@ func BuildDSXIMDSJWTAuthenticator(clusterName string, dsxIMDS config.DSXImdsConf
 		dsxIMDS.IssuerURL,
 		discoveryURL,
 		dsxIMDS.DiscoveryCA,
-		dsxIMDSBootstrapGroupExpression(dsxIMDS.OperatorTenant),
+		"",
 	), nil
-}
-
-func dsxIMDSBootstrapGroupExpression(operatorTenant string) string {
-	subjectPrefix := strconv.Quote("spiffe://" + operatorTenant + ".")
-	// Any process on the host can ask IMDS for an audience-scoped token. Keep
-	// bootstrap RBAC narrow: only DSX bare-metal host identities for the
-	// configured operator tenant enter the node-bootstrapper group.
-	return fmt.Sprintf("claims.sub.startsWith(%s) && claims.sub.matches('^spiffe://[^/]+/bm/[^/]+$') ? ['nvke:node-bootstrapper'] : []", subjectPrefix)
 }
 
 // BuildOperatorJWTAuthenticator maps one validated operator provider to the

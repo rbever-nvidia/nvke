@@ -36,6 +36,7 @@ UPLINK_ROUTE_DESTINATION="${UPLINK_ROUTE_DESTINATION:-}"
 # <network>.1 from UPLINK_ADDRESS/UPLINK_PREFIX).
 UPLINK_ROUTE_VIA_MODE="${UPLINK_ROUTE_VIA_MODE:-}"
 UPLINK_ROUTE_VIA_IP="${UPLINK_ROUTE_VIA_IP:-}"
+OVS_DEFAULT_ROUTE_WAIT_SECONDS="${OVS_DEFAULT_ROUTE_WAIT_SECONDS:-60}"
 
 error_exit() {
   echo "Error: $1" >&2
@@ -469,6 +470,27 @@ EOF
   netplan set "bridges.$BRIDGE_NAME.openvswitch={}"
 }
 
+wait_for_default_route_on_bridge() {
+  local bridge_name="$1"
+  local deadline=$((SECONDS + OVS_DEFAULT_ROUTE_WAIT_SECONDS))
+  local current_default_if
+
+  while true; do
+    current_default_if=$(ip route show default | awk '/default/ {print $5; exit}')
+    if [ "$current_default_if" = "$bridge_name" ]; then
+      echo "Default route is now using bridge interface: $bridge_name"
+      return
+    fi
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      error_exit "Default route is not using bridge $bridge_name (currently using ${current_default_if:-none})"
+    fi
+
+    echo "Waiting for default route to use bridge $bridge_name (currently using ${current_default_if:-none})..."
+    sleep 2
+  done
+}
+
 verify_bridge() {
   # default_route_if (optional): the NIC that originally held the default
   # route, captured before any uplink selector ran. When provided AND not
@@ -488,11 +510,7 @@ verify_bridge() {
   fi
 
   if [ "$check_default_route" = "true" ]; then
-    NEW_DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -n1)
-    if [ "$NEW_DEFAULT_IF" != "$BRIDGE_NAME" ]; then
-      error_exit "Default route is not using bridge $BRIDGE_NAME (currently using $NEW_DEFAULT_IF)"
-    fi
-    echo "Default route is now using bridge interface: $BRIDGE_NAME"
+    wait_for_default_route_on_bridge "$BRIDGE_NAME"
   else
     echo "Bridge $BRIDGE_NAME owns non-default-route NIC $KERNEL_IF; default route remains on ${default_route_if:-mgmt NIC}"
   fi

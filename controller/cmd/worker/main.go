@@ -339,6 +339,18 @@ func main() {
 				os.Exit(1)
 			}
 		}
+
+		machineBootstrapRBACController := capi.NewMachineBootstrapRBACController(
+			cfg,
+			k8sControllerManager.GetClient(),
+			tenantClientProvider,
+			logger.With("logger", "machine-bootstrap-rbac-controller"),
+			trustDomain,
+		)
+		if err := machineBootstrapRBACController.SetupWithManager(k8sControllerManager); err != nil {
+			logger.Error("Failed to set up machine bootstrap RBAC controller", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	if !cfg.NicoControllersEnabled {

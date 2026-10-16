@@ -153,6 +153,20 @@ data:
           - "kubernetes.io/kubelet-serving"
           - "kubernetes.io/kube-apiserver-client-kubelet"
         verbs: ["approve"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterrolebindings"]
+        resourceNames:
+          - "nvke:node-bootstrapper"
+          - "nvke:node-bootstrapper:get-nodes"
+        verbs: ["get", "patch"]
+      # Updating a binding's subjects also requires permission to bind the
+      # referenced role, otherwise Kubernetes rejects the patch as privilege escalation.
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles"]
+        resourceNames:
+          - "system:node-bootstrapper"
+          - "kubeadm:get-nodes"
+        verbs: ["bind"]
     ---
     apiVersion: rbac.authorization.k8s.io/v1
     kind: Role
@@ -180,6 +194,20 @@ data:
       - apiGroups: ["apps"]
         resources: ["daemonsets", "deployments"]
         verbs: ["get", "create", "patch", "update"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["rolebindings"]
+        resourceNames:
+          - "nvke:node-bootstrapper:kubelet-config"
+          - "nvke:node-bootstrapper:nodes-kubeadm-config"
+        verbs: ["get", "patch"]
+      # Same escalation check as ClusterRoleBindings, scoped to the kube-system
+      # Roles used by kubeadm's bootstrap kubeconfig discovery.
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles"]
+        resourceNames:
+          - "kubeadm:kubelet-config"
+          - "kubeadm:nodes-kubeadm-config"
+        verbs: ["bind"]
     ---
     apiVersion: rbac.authorization.k8s.io/v1
     kind: Role
@@ -236,10 +264,6 @@ data:
     kind: ClusterRoleBinding
     metadata:
       name: nvke:node-bootstrapper
-    subjects:
-      - kind: Group
-        name: nvke:node-bootstrapper
-        apiGroup: rbac.authorization.k8s.io
     roleRef:
       kind: ClusterRole
       name: system:node-bootstrapper
@@ -249,10 +273,6 @@ data:
     kind: ClusterRoleBinding
     metadata:
       name: nvke:node-bootstrapper:get-nodes
-    subjects:
-      - kind: Group
-        name: nvke:node-bootstrapper
-        apiGroup: rbac.authorization.k8s.io
     roleRef:
       kind: ClusterRole
       name: kubeadm:get-nodes
@@ -263,10 +283,6 @@ data:
     metadata:
       name: nvke:node-bootstrapper:kubelet-config
       namespace: kube-system
-    subjects:
-      - kind: Group
-        name: nvke:node-bootstrapper
-        apiGroup: rbac.authorization.k8s.io
     roleRef:
       kind: Role
       name: kubeadm:kubelet-config
@@ -277,10 +293,6 @@ data:
     metadata:
       name: nvke:node-bootstrapper:nodes-kubeadm-config
       namespace: kube-system
-    subjects:
-      - kind: Group
-        name: nvke:node-bootstrapper
-        apiGroup: rbac.authorization.k8s.io
     roleRef:
       kind: Role
       name: kubeadm:nodes-kubeadm-config

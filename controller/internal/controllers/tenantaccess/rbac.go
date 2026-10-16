@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +32,9 @@ const (
 	// legacyRBACName is the name the pre-rename manifest gave the controller's own
 	// Role, ClusterRole and their bindings.
 	legacyRBACName = "nke:cwe"
+	// legacyBootstrapGroupName is the broad group subject used by the earlier
+	// bootstrap RBAC model before per-Machine subjects were added dynamically.
+	legacyBootstrapGroupName = "nvke:node-bootstrapper"
 )
 
 // legacyRBACObject is a tenant RBAC object an earlier release applied under the
@@ -39,6 +44,12 @@ type legacyRBACObject struct {
 	kind      string
 	namespace string
 	name      string
+}
+
+type bootstrapBindingRef struct {
+	name      string
+	namespace string
+	cluster   bool
 }
 
 // legacyRBACObjects returns everything the pre-rename manifest created: the
@@ -52,6 +63,15 @@ func legacyRBACObjects() []legacyRBACObject {
 		{"RoleBinding", "kube-system", legacyRBACName},
 		{"Role", "kube-node-lease", legacyRBACName},
 		{"RoleBinding", "kube-node-lease", legacyRBACName},
+	}
+}
+
+func bootstrapBindingsWithLegacyGroup() []bootstrapBindingRef {
+	return []bootstrapBindingRef{
+		{name: "nvke:node-bootstrapper", cluster: true},
+		{name: "nvke:node-bootstrapper:get-nodes", cluster: true},
+		{name: "nvke:node-bootstrapper:kubelet-config", namespace: "kube-system"},
+		{name: "nvke:node-bootstrapper:nodes-kubeadm-config", namespace: "kube-system"},
 	}
 }
 
@@ -89,6 +109,74 @@ func pruneLegacyRBAC(ctx context.Context, c ctrlclient.Client, manifest []byte) 
 		}
 	}
 	return nil
+}
+
+func pruneLegacyBootstrapGroupSubjects(ctx context.Context, c ctrlclient.Client) error {
+	for _, binding := range bootstrapBindingsWithLegacyGroup() {
+		if binding.cluster {
+			if err := pruneLegacyBootstrapGroupFromClusterRoleBinding(ctx, c, binding.name); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := pruneLegacyBootstrapGroupFromRoleBinding(ctx, c, binding.namespace, binding.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pruneLegacyBootstrapGroupFromClusterRoleBinding(ctx context.Context, c ctrlclient.Client, name string) error {
+	binding := &rbacv1.ClusterRoleBinding{}
+	if err := c.Get(ctx, ctrlclient.ObjectKey{Name: name}, binding); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting bootstrap ClusterRoleBinding %s: %w", name, err)
+	}
+	updatedSubjects, changed := removeLegacyBootstrapGroup(binding.Subjects)
+	if !changed {
+		return nil
+	}
+	patchBase := binding.DeepCopy()
+	binding.Subjects = updatedSubjects
+	if err := c.Patch(ctx, binding, ctrlclient.MergeFrom(patchBase)); err != nil {
+		return fmt.Errorf("pruning legacy bootstrap group from ClusterRoleBinding %s: %w", name, err)
+	}
+	return nil
+}
+
+func pruneLegacyBootstrapGroupFromRoleBinding(ctx context.Context, c ctrlclient.Client, namespace, name string) error {
+	binding := &rbacv1.RoleBinding{}
+	if err := c.Get(ctx, ctrlclient.ObjectKey{Namespace: namespace, Name: name}, binding); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting bootstrap RoleBinding %s/%s: %w", namespace, name, err)
+	}
+	updatedSubjects, changed := removeLegacyBootstrapGroup(binding.Subjects)
+	if !changed {
+		return nil
+	}
+	patchBase := binding.DeepCopy()
+	binding.Subjects = updatedSubjects
+	if err := c.Patch(ctx, binding, ctrlclient.MergeFrom(patchBase)); err != nil {
+		return fmt.Errorf("pruning legacy bootstrap group from RoleBinding %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
+func removeLegacyBootstrapGroup(subjects []rbacv1.Subject) ([]rbacv1.Subject, bool) {
+	updated := subjects[:0]
+	changed := false
+	for _, subject := range subjects {
+		if subject.Kind == rbacv1.GroupKind && subject.Name == legacyBootstrapGroupName {
+			changed = true
+			continue
+		}
+		updated = append(updated, subject)
+	}
+	return updated, changed
 }
 
 // readRBACManifest reads the operator-managed nke-rbac ConfigMap from the
