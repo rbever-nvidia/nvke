@@ -198,15 +198,42 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function copyToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function(resolve, reject) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) resolve();
+        else reject(new Error('copy failed'));
+    });
+}
+
+function copyableHtml(text, label) {
+    var title = 'Copy ' + label;
+    return '<span class="copyable-value">' +
+        '<span class="copyable-text">' + escapeHtml(text) + '</span>' +
+        '<button type="button" class="copy-btn" data-copy="' + escapeAttribute(text) + '" title="' + escapeAttribute(title) + '" aria-label="' + escapeAttribute(title) + '">&#10697;</button>' +
+        '</span>';
+}
+
 function buildRowCells(inst) {
     var status = inst.status || 'Unknown';
     var ip = getIP(inst);
     var ipxe = inst.ipxeScript || '';
     var isDHCP = ipxe !== '';
+    var name = inst.name || inst.id;
     return {
-        name: '<span class="chevron">&#9656;</span> ' + escapeHtml(inst.name || inst.id),
+        name: '<span class="name-line"><span class="chevron">&#9656;</span>' + copyableHtml(name, 'name') + '</span>',
         status: '<span class="badge ' + statusBadgeClass(status) + '">' + escapeHtml(status) + '</span>',
-        ip: escapeHtml(ip),
+        ip: ip === '\u2014' ? escapeHtml(ip) : copyableHtml(ip, 'IP address'),
         itype: escapeHtml(instanceTypeNames[inst.instanceTypeId] || inst.instanceTypeId || '\u2014'),
         dhcp: boolIndicator(isDHCP),
         phone: boolIndicator(inst.phoneHomeEnabled),
@@ -1350,6 +1377,27 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('auto-refresh').addEventListener('change', function(e) {
         if (e.target.checked) { startRefresh(); } else { stopRefresh(); }
     });
+
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('.copy-btn');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var text = btn.getAttribute('data-copy') || '';
+        if (!text) return;
+        copyToClipboard(text).then(function() {
+            var prev = btn.textContent;
+            btn.textContent = '\u2713';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                if (!btn.isConnected) return;
+                btn.textContent = prev;
+                btn.classList.remove('copied');
+            }, 1000);
+        }).catch(function(err) {
+            btn.title = 'Copy failed: ' + (err && err.message ? err.message : err);
+        });
+    }, true);
 
     document.getElementById('files-refresh').addEventListener('click', function() {
         loadFilesTree();
