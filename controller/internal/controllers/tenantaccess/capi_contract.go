@@ -86,7 +86,7 @@ func (c *Controller) upsertClusterCASecret(ctx context.Context, cluster db.Clust
 	//
 	// For worker node only, we shouldn't even need to write the tls.key entry at all.
 	// This should be removed once CABPK accepts a cert-only Secret for joinWorker().
-	// https://<add-link-to-upstream-issue-here>
+	// https://github.com/kubernetes-sigs/cluster-api/issues/14388
 	//
 	// The upstream CABPK's joinWorker() function calls Certificates.EnsureAllExist(),
 	// which checks that the tls.key portion also exists.
