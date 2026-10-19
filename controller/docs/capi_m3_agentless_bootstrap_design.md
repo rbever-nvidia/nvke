@@ -7,7 +7,7 @@ Author: rbever
 | Revision | Date | Notes |
 |---|---|---|
 | 1.0 | Oct 15, 2026 | Implementation design for the agent-less CABPK worker join. The DSX IMDS identity source and the NVKE SPIRE identity source are both first-class. |
-| 1.1 | Oct 16, 2026 | Add the exact per-Machine bootstrap RBAC subject strategy proven in the POC and select it over broad subject-pattern RBAC. |
+| 1.1 | Oct 16, 2026 | Select exact per-Machine bootstrap RBAC subjects over broad subject-pattern RBAC. |
 
 ## Related Designs
 
@@ -199,11 +199,8 @@ work that marks the node ready for scheduling, such as clearing the
 ### Discovery Authentication
 
 Both identity sources authenticate with structured authentication. The tenant
-apiserver maps the discovery JWT's `sub` claim to the request's Kubernetes
-username. The authentication configuration may also add
-`nvke:node-bootstrapper` to the user's groups so NVKE can tell that the request
-used a worker-bootstrap identity source. The expression differs by identity
-source.
+apiserver validates the discovery JWT issuer, audience, and signature, then
+maps the JWT's `sub` claim to the request's Kubernetes username.
 
 For example, a DSX IMDS worker discovery JWT could look like this:
 
@@ -228,16 +225,46 @@ An NVKE SPIRE worker discovery JWT could look like this:
 After the tenant apiserver accepts the JWT, it builds Kubernetes user info for
 the request. That user info has a `username` and a list of `groups`, just like a
 normal Kubernetes client certificate or service account token. The structured
-authentication config below uses the JWT `sub` claim as the `username`. Its CEL
-expression adds the bootstrap group only when the subject has the shape this
-identity source owns, such as `/bm/<id>` for IMDS or
-`/kubeadm/join/<machine-uid>` for NVKE SPIRE:
+authentication config uses the JWT `sub` claim as the `username`:
 
 ```yaml
 claimMappings:
   username:
     claim: sub
     prefix: ""
+```
+
+### Bootstrap RBAC Subject Strategy
+
+After the tenant apiserver authenticates the discovery JWT, `kubeadm join`
+still needs Kubernetes RBAC that lets it submit the kubelet client CSR and read
+the cluster config used during join. These permissions match what kubeadm
+otherwise grants to
+`system:bootstrappers:kubeadm:default-node-token`:
+
+- bind to `system:node-bootstrapper` so the kubelet can create its client CSR
+- bind to `kubeadm:get-nodes` so kubeadm can read Node information
+- bind to `kubeadm:nodes-kubeadm-config` in `kube-system` so kubeadm can read the node and kubeadm config needed during join
+- bind to `kubeadm:kubelet-config` in `kube-system` so kubeadm can read the kubelet config needed during join
+
+Those bindings let kubeadm submit the kubelet client CSR and read the config it
+needs during join. They do not approve the CSR or grant broad tenant access.
+Approval is a separate decision by NVKE.
+
+This design compares two strategies for choosing which authenticated subject
+receives those join-time permissions: subject-pattern group RBAC, and exact
+per-Machine User RBAC.
+
+#### Subject-Pattern Group RBAC
+
+Structured authentication maps every subject with the expected shape into
+`nvke:node-bootstrapper`, and RBAC binds that group to the join-time
+permissions. The group expression adds the bootstrap group only when the
+subject has the shape this identity source owns, such as `/bm/<id>` for IMDS or
+`/kubeadm/join/<machine-uid>` for NVKE SPIRE:
+
+```yaml
+claimMappings:
   groups:
     expression: "<subject match> ? ['nvke:node-bootstrapper'] : []"
 ```
@@ -259,15 +286,8 @@ literal path identifies the identity source: `/bm/` for DSX IMDS or
 `/kubeadm/join/` for NVKE SPIRE. If the subject matches, the expression returns
 the bootstrap group. If it does not match, it returns no groups.
 
-### Bootstrap RBAC Subject Strategy
-
-There are two viable ways to grant the join-time RBAC permissions that kubeadm
-needs after the tenant apiserver authenticates the discovery JWT.
-
-**Subject-pattern group RBAC.** Structured authentication maps every subject
-with the expected shape into `nvke:node-bootstrapper`, and RBAC binds that
-group to the join-time permissions. A simplified binding to the
-`system:node-bootstrapper` ClusterRole looks like this:
+A simplified binding to the `system:node-bootstrapper` ClusterRole looks like
+this:
 
 ```yaml
 subjects:
@@ -278,26 +298,19 @@ roleRef:
   name: system:node-bootstrapper
 ```
 
-Group `nvke:node-bootstrapper` gets the join-time permissions kubeadm otherwise
-grants to `system:bootstrappers:kubeadm:default-node-token`:
+This strategy is simple, but every subject that matches the configured CEL
+pattern receives the same discovery RBAC until the CSR approver rejects or
+accepts the CSR.
 
-- bind to `system:node-bootstrapper` so the kubelet can create its client CSR
-- bind to `kubeadm:get-nodes` so kubeadm can read Node information
-- bind to `kubeadm:nodes-kubeadm-config` in `kube-system` so kubeadm can read the node and kubeadm config needed during join
-- bind to `kubeadm:kubelet-config` in `kube-system` so kubeadm can read the kubelet config needed during join
+#### Exact Per-Machine User RBAC
 
-Those bindings let kubeadm submit the kubelet client CSR and read the config it
-needs during join. They do not approve the CSR or grant broad tenant access.
-Approval is a separate decision by NVKE. This strategy is simple, but every
-subject that matches the configured CEL pattern receives the same discovery
-RBAC until the CSR approver rejects or accepts the CSR.
-
-**Exact per-Machine User RBAC.** NVKE adds the exact authenticated
-username for each joining Machine to the bootstrap RBAC bindings, then removes
-that subject after CAPI observes `Machine.status.nodeRef`. The tenant apiserver
-still authenticates the JWT and may still add `nvke:node-bootstrapper` as a
-classification signal for the CSR approver, but RBAC is granted to concrete
-User subjects, not to every subject that matches a pattern.
+NVKE adds the exact authenticated username for each joining Machine to the
+bootstrap RBAC bindings, then removes that subject after CAPI observes
+`Machine.status.nodeRef`. In this strategy, the `nvke:node-bootstrapper` group
+does not grant kubeadm's join-time permissions. The exact User subject does.
+The CSR approver does not need a bootstrap group for this strategy; it validates
+the authenticated username, CSR signer and usages, and the expected Machine
+match.
 
 For an NVKE SPIRE worker, the temporary subject is:
 
@@ -311,13 +324,16 @@ For a DSX IMDS worker, the temporary subject is:
 spiffe://<operator-tenant>.<region>.dsx.<partition>/bm/<id>
 ```
 
-The POC proved exact per-Machine User RBAC with CABPK and NVKE SPIRE. A worker
-joined with an exact User subject in tenant RBAC, the kubelet client CSR was
-approved for that exact SPIFFE subject, and NVKE removed the subject after the
-Machine got `nodeRef`. Implement exact per-Machine User RBAC unless scale
-testing shows that frequent subject-list updates are a problem. Keep
-subject-pattern group RBAC as the fallback because it avoids per-Machine RBAC
-writes at the cost of broader bootstrap authorization.
+The tradeoffs are:
+
+| Strategy | Pros | Cons |
+|---|---|---|
+| Subject-pattern group RBAC | Keeps tenant RBAC static. Avoids per-Machine RBAC patching during join bursts. Scales with the number of configured identity sources instead of the number of joining Machines. | Any subject that matches the configured pattern receives bootstrap discovery RBAC until CSR approval rejects or accepts the request. The pattern becomes a security boundary and needs careful review for each issuer shape. |
+| Exact per-Machine User RBAC | Grants bootstrap discovery RBAC only to the specific Machine identity that NVKE expects. Keeps authorization tied to CAPI Machine lifecycle, which makes the CSR approver's Machine match a second check rather than the first authorization boundary. | Requires NVKE to patch and later clean up tenant RBAC for each joining Machine. Large join bursts can create API churn, patch conflicts, and subject-list size pressure. |
+
+This design selects exact per-Machine User RBAC. Use subject-pattern group RBAC
+only as a fallback if scale testing shows that frequent subject-list updates
+are a problem.
 
 The hard list-size limit is high because the exact subjects exist only while a
 Machine is joining. These estimates use compact JSON for one RBAC object and
@@ -334,18 +350,21 @@ The practical limit may be lower because each join and cleanup patches four
 RBAC objects. Large bursts can hit API churn or patch-conflict behavior before
 the object-size ceiling.
 
+For large join bursts, NVKE can reduce churn by periodically reconciling the
+desired subject list from all Machines that do not yet have `nodeRef`, then
+patching each RBAC object only when the aggregate list changes. That shape
+still uses exact per-Machine subjects, but avoids turning every Machine queue
+event into an immediate tenant RBAC patch.
+
 ### Client CSR Approval
 
 Authentication of the discovery JWT and exact bootstrap RBAC are not approval
-of the kubelet client CSR. The NVKE tenant CSR approver checks the
-authenticated username and, if configured, the bootstrap classification group,
-then checks the subject against the expected Machine.
+of the kubelet client CSR. The NVKE tenant CSR approver checks the CSR signer
+and usages, the authenticated username, and the expected Machine match.
 
 It skips the CSR when:
 
 - the authenticated Kubernetes username, derived from the JWT `sub` claim, does not match the identity source's subject
-- the groups omit `nvke:node-bootstrapper`, when the CSR approver is configured
-  to require that classification group
 - the identity does not match exactly one Machine
 - the Machine is a control-plane Machine
 - the Machine is deleting
@@ -571,10 +590,8 @@ Without that, SPIRE returns empty selectors. The agent unit therefore needs
 
 As described in [Discovery Authentication](#discovery-authentication), this
 identity source extends the tenant apiserver's existing NVKE SPIRE structured
-authentication. It does not add a separate authenticator. The group expression
-matches the `/kubeadm/join/<machine-uid>` subject shape for CSR-approver
-classification, while the selected RBAC strategy grants join-time permissions
-to exact per-Machine User subjects.
+authentication. It does not add a separate authenticator. The selected RBAC
+strategy grants join-time permissions to exact per-Machine User subjects.
 
 ### Node Provider ID
 
@@ -604,15 +621,13 @@ one provider-ID ownership model:
 | Publish CABPK contract | Tenant-access publishes `<cluster>-ca` and `Cluster.spec.controlPlaneEndpoint` before worker bootstrap data. | Same. | Same. |
 | Create the discovery credential | The exec plugin requests a JWT at join time. | IMDS mints a JWT with the worker `/bm/<id>` subject and cluster audience. | NVKE creates a temporary `kubeadm/join/<machine-uid>` entry, SPIRE issues that JWT-SVID, and NVKE removes the entry after `nodeRef`. |
 | Tenant authentication and RBAC | Structured authentication maps the JWT subject to the Kubernetes username. Exact per-Machine User RBAC grants kubeadm join-time permissions and is removed after `nodeRef`. | Structured authentication trusts the IMDS issuer. The exact RBAC subject is the full SPIFFE-shaped username with the `/bm/<id>` path. | Existing NVKE SPIRE structured authentication is extended. The exact RBAC subject is the full SPIFFE ID with the `kubeadm/join/<machine-uid>` path. |
-| Kubelet client CSR | NVKE skips unless authenticated username, group, and Machine checks pass. | `/bm/<id>` maps to the BareMetalInstance identity on exactly one worker `LaunchLayerMachine`. | `kubeadm/join/<machine-uid>` maps directly to the expected worker Machine. |
+| Kubelet client CSR | NVKE skips unless the CSR signer and usages, authenticated username, and Machine checks pass. | `/bm/<id>` maps to the BareMetalInstance identity on exactly one worker `LaunchLayerMachine`. | `kubeadm/join/<machine-uid>` maps directly to the expected worker Machine. |
 | Kubelet serving CSR | Post-join. Requeue until `Machine.status.nodeRef` is set, then validate SANs. | Same. | Same. |
 
 ## Implementation Stories
 
-The POC has proven both identity sources with CABPK and no node-agent driven
-join. The implementation epic can split into focused stories that keep the
-shared contract stable while allowing DSX IMDS and NVKE SPIRE to progress in
-parallel.
+The implementation epic can split into focused stories that keep the shared
+contract stable while allowing DSX IMDS and NVKE SPIRE to progress in parallel.
 
 ### Story 1: Shared CABPK Worker Join Foundation
 
@@ -665,11 +680,20 @@ Work items:
   remove it after CAPI observes `Machine.status.nodeRef`.
 - Keep the subject-list patching concurrency safe. A reconcile must not
   silently overwrite another controller's subject-list update.
+- Account for large join bursts by designing the subject-list reconciler to
+  coalesce updates, such as by periodically reconciling the aggregate set of
+  Machines without `nodeRef` instead of patching tenant RBAC on every Machine
+  queue event.
+- Enforce a configured maximum number of concurrent bootstrap subjects before
+  patching tenant RBAC, based on the smallest supported RBAC object-size budget.
+  If the pending Machine set exceeds that budget, NVKE should leave excess
+  Machines waiting and report the capacity limit rather than producing an
+  oversized RBAC object.
 - Render structured authentication for the selected worker bootstrap identity
   source.
-- Refactor the client CSR approver to share the common checks: username,
-  group, single Machine match, worker-only, not deleting, and no existing
-  `nodeRef`.
+- Refactor the client CSR approver to share the common checks: signer and
+  usages, username, single Machine match, worker-only, not deleting, and no
+  existing `nodeRef`.
 
 Acceptance criteria:
 
@@ -677,6 +701,8 @@ Acceptance criteria:
   User subjects for Machines that have not joined yet.
 - The exact bootstrap subject is removed from tenant RBAC after the Machine
   gets `nodeRef`.
+- Large worker join bursts do not require one tenant RBAC patch per Machine
+  queue event.
 - A CSR with bootstrap RBAC but the wrong worker identity is not approved.
 
 ### Story 3: DSX IMDS Identity Source
@@ -690,7 +716,7 @@ Work items:
   artifact.
 - Add the IMDS discovery kubeconfig user that invokes `imds-jwt-exec-auth`.
 - Render the IMDS structured authenticator with the tenant cluster audience,
-  issuer, CA bundle, and `/bm/<id>` group expression.
+  issuer, CA bundle, and username mapping.
 - Ensure CAPLL exposes the tenant-facing BareMetalInstance identity on the
   `LaunchLayerMachine`.
 - Match client CSRs by resolving `/bm/<id>` to the `LaunchLayerMachine` owned
