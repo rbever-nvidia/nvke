@@ -415,13 +415,15 @@ sequenceDiagram
     participant Host as WorkerHost
     participant IMDS as DSXIMDS
     participant Tenant as TenantAPIServer
-    participant NVKE as NVKECSRApprover
+    participant RBAC as MachineBootstrapRBACController
+    participant CSR as NVKECSRApprover
 
     MD->>MS: Create generation
     MS->>Machine: Create Machine
     MS->>CABPK: Create KubeadmConfig
     MS->>Infra: Create LaunchLayerMachine
     Infra->>Infra: Provision the BareMetalInstance and record its identity
+    RBAC->>Tenant: Grant bootstrap RBAC to the exact /bm/id subject
     CABPK->>Host: Publish bootstrap data
     Infra->>Host: Boot the instance
     Host->>IMDS: Exec plugin requests identity JWT for the cluster audience
@@ -429,9 +431,10 @@ sequenceDiagram
     Host->>Tenant: kubeadm join presents the IMDS JWT
     Tenant->>Tenant: Validate issuer, audience, and /bm/id subject
     Host->>Tenant: Create kubelet client CSR
-    NVKE->>NVKE: Match /bm/id to the LaunchLayerMachine identity
-    NVKE->>Tenant: Approve the CSR
+    CSR->>CSR: Match /bm/id to the LaunchLayerMachine identity
+    CSR->>Tenant: Approve the CSR
     Machine->>Machine: Observe tenant Node and set nodeRef
+    RBAC->>Tenant: Remove bootstrap RBAC for the joined Machine
 ```
 
 The join credential is not in user data. IMDS mints it when the exec plugin
@@ -512,28 +515,38 @@ sequenceDiagram
     participant Machine
     participant CABPK
     participant Infra as CAPNICo
+    participant NicoSpiffe as NicoSpiffeController
+    participant JoinEntry as MachineJoinSpireEntryController
+    participant TPMAllowlist as tpmpubhashes.Controller
+    participant RBAC as MachineBootstrapRBACController
     participant Host as WorkerHost
     participant SPIRE as NVKE SPIRE Server
     participant Tenant as TenantAPIServer
-    participant NVKE as NVKECSRApprover
+    participant CSR as NVKECSRApprover
 
     MD->>MS: Create generation
     MS->>Machine: Create Machine
     MS->>CABPK: Create KubeadmConfig
     MS->>Infra: Create NicoMachine
-    NVKE->>SPIRE: Create the kubeadm/join entry for the Machine
-    CABPK->>Host: Publish bootstrap data
-    Infra->>Host: Create instance
+    CABPK->>Infra: Publish bootstrap data Secret
+    Infra->>Host: Create instance with bootstrap data
+    Infra->>Infra: Record the TPM EK pubhash on NicoMachine
+    NicoSpiffe->>Machine: Record the SPIRE agent ID path
+    JoinEntry->>SPIRE: Apply the temporary kubeadm/join ClusterStaticEntry
+    TPMAllowlist->>SPIRE: Authorize the parent TPM pubhash for agent attestation
+    RBAC->>Tenant: Grant bootstrap RBAC to the exact kubeadm/join subject
     Host->>SPIRE: Attest through the local SPIRE agent
     Host->>SPIRE: Exec plugin requests the join JWT-SVID
     SPIRE->>Host: JWT-SVID for kubeadm/join/machine-uid
     Host->>Tenant: kubeadm join presents the SPIFFE JWT
     Tenant->>Tenant: Validate the NVKE SPIRE issuer and audience
     Host->>Tenant: Create kubelet client CSR
-    NVKE->>NVKE: Match the join identity to the Machine
-    NVKE->>Tenant: Approve the CSR
+    CSR->>CSR: Match the join identity to the Machine
+    CSR->>Tenant: Approve the CSR
     Machine->>Machine: Observe tenant Node and set nodeRef
-    NVKE->>SPIRE: Remove the kubeadm/join entry
+    JoinEntry->>SPIRE: Delete the temporary kubeadm/join ClusterStaticEntry
+    TPMAllowlist->>SPIRE: Reconcile the TPM pubhash allowlist
+    RBAC->>Tenant: Remove bootstrap RBAC for the joined Machine
 ```
 
 The join credential is not in user data. NVKE creates a temporary
