@@ -160,6 +160,10 @@ const (
 	// exec-auth or a verbatim admin.conf.
 	KubeconfigMode Key = "kubeconfig-mode"
 
+	// Bootstrap controls on concrete Cluster API bootstrap resources.
+	BootstrapIdentityResolver                 Key = "bootstrap-identity-resolver"
+	BootstrapIdentitySpireWorkloadEntryConfig Key = "bootstrap-identity-spire-workload-entry-config"
+
 	// NodeMachineHealthIssue is the health-issue annotation on a Kubernetes
 	// Node.
 	NodeMachineHealthIssue Key = "machine-health-issue"
@@ -177,6 +181,7 @@ const (
 	MachineReboot                  Key = "reboot"
 	MachineHealthIssue             Key = "machine-health-issue"
 	MachineSpireAgentSpiffeIDPath  Key = "spire-agent-spiffe-id-path"
+	MachineBootstrapIdentity       Key = "bootstrap-identity"
 
 	// Taints.
 	MaintenanceTaint  Key = "maintenance"
