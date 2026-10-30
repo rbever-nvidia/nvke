@@ -194,6 +194,10 @@ type Config struct {
 	// requires the Cluster API KubeadmConfig CRD.
 	BootstrapControllersEnabled bool `controllerconfig:"bootstrapControllersEnabled"`
 
+	// BootstrapAuthorizationMaxSubjects bounds the number of joining
+	// Machine identities written into each tenant bootstrap RBAC binding.
+	BootstrapAuthorizationMaxSubjects int `controllerconfig:"bootstrapAuthorizationMaxSubjects"`
+
 	// KubeVipFMDSEndpoint is the full Forge Metadata Service URL used to resolve
 	// the per-node DPU ASN on native-networking sites. When empty, CAPI and
 	// subnet-based NICo pools use the static Forge peer ASN.

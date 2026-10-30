@@ -44,6 +44,7 @@ render readiness-custom \
 
 render legacy-calico \
   --set cni.allowLegacyCalicoClusterCreation=true
+render bootstrap-enabled --set controllers.bootstrap.enabled=true
 
 # Monitoring stays independent of renewal and both config surfaces agree.
 render monitoring-without-renewal \
@@ -80,6 +81,8 @@ refuse() {
   fi
   [[ "${refusal}" == *"${want}"* ]] || { echo "$* failed for another reason: ${refusal}" >&2; exit 1; }
 }
+refuse "controllers.bootstrap.maxConcurrentSubjects must be greater than 0" \
+  --set controllers.bootstrap.enabled=true --set controllers.bootstrap.maxConcurrentSubjects=0
 refuse "credentialMonitoring.warningDays must be positive" --set credentialMonitoring.warningDays=0
 refuse "credentialMonitoring.warningDays must be positive" \
   --set credentialMonitoring.enabled=false --set scheduledMaintenance.certRenewal.enabled=false \

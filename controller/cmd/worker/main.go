@@ -425,6 +425,17 @@ func main() {
 		} else {
 			logger.Info("SPIRE NICo TPM bootstrap identity controller disabled by configuration")
 		}
+
+		bootstrapAuthorizationController := bootstrap.NewAuthorizationController(
+			k8sControllerManager.GetClient(),
+			tenantClientProvider,
+			logger.With("logger", "bootstrap-authorization-controller"),
+			cfg.BootstrapAuthorizationMaxSubjects,
+		)
+		if err := bootstrapAuthorizationController.SetupWithManager(k8sControllerManager); err != nil {
+			logger.Error("Failed to set up bootstrap authorization controller", "error", err)
+			os.Exit(1)
+		}
 	} else {
 		logger.Info("Bootstrap controllers disabled by configuration")
 	}

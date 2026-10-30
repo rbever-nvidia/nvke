@@ -82,6 +82,8 @@ controllers:
   bootstrap:
     # -- Run the Kubernetes-native bootstrap controllers. Each runs only for Machines that opt in by label.
     enabled: false
+    # -- Maximum joining Machine identities written into each tenant bootstrap RBAC binding.
+    maxConcurrentSubjects: 4000
   nico:
     # -- Run controllers that watch NICo infrastructure resources.
     enabled: true

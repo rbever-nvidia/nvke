@@ -110,6 +110,7 @@ var configMapOnly = []string{
 	"allowLegacyCalicoClusterCreation",
 	"allowControlPlaneWithoutVIP",
 	"bootstrapControllersEnabled",
+	"bootstrapAuthorizationMaxSubjects",
 	"nodeMetadataAllowlistedLabelKeys",
 	"machineMetadataAllowlistedLabelKeys",
 	"machineMetadataAllowlistedAnnotationKeys",

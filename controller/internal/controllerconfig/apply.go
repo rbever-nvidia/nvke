@@ -77,6 +77,7 @@ func (c *Config) ApplyTo(cfg *config.Config) {
 	cfg.InstallCNIAfterInit = c.InstallCNIAfterInit
 	cfg.NicoControllersEnabled = c.NicoControllersEnabled
 	cfg.BootstrapControllersEnabled = c.BootstrapControllersEnabled
+	cfg.BootstrapAuthorizationMaxSubjects = c.BootstrapAuthorizationMaxSubjects
 	cfg.ProfilesDir = c.ProfilesDir
 	cfg.RunbooksDir = c.RunbooksDir
 	cfg.TenantAccessEnabled = c.TenantAccessEnabled

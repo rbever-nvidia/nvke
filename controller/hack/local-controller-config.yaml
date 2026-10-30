@@ -49,6 +49,7 @@ allowLegacyCalicoClusterCreation: false
 allowControlPlaneWithoutVIP: false
 nicoControllersEnabled: false
 bootstrapControllersEnabled: false
+bootstrapAuthorizationMaxSubjects: 4000
 profilesDir: test/fixtures/profiles
 runbooksDir: test/fixtures/runbooks
 tenantAccessEnabled: false

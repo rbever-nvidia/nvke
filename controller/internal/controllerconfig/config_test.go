@@ -385,6 +385,21 @@ nodeAgent:
 	assert.Contains(t, err.Error(), "metricsListenAddress must not be empty")
 }
 
+func TestValidateBootstrapAuthorizationMaxSubjects(t *testing.T) {
+	t.Parallel()
+
+	_, err := controllerconfig.Load(writeConfig(t, `
+metricsListenAddress: 127.0.0.1:9090
+bootstrapControllersEnabled: true
+spire:
+  joinTokenTTL: 1h
+nodeAgent:
+  spireAttestationMethod: tpm
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bootstrapAuthorizationMaxSubjects must be greater than 0")
+}
+
 func TestValidateManagementNamespace(t *testing.T) {
 	t.Parallel()
 

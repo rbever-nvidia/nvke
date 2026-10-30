@@ -54,6 +54,7 @@ type Config struct {
 	AllowLegacyCalicoClusterCreation         bool                       `json:"allowLegacyCalicoClusterCreation"`
 	NicoControllersEnabled                   bool                       `json:"nicoControllersEnabled"`
 	BootstrapControllersEnabled              bool                       `json:"bootstrapControllersEnabled"`
+	BootstrapAuthorizationMaxSubjects        int                        `json:"bootstrapAuthorizationMaxSubjects"`
 	ProfilesDir                              string                     `json:"profilesDir"`
 	RunbooksDir                              string                     `json:"runbooksDir"`
 	TenantAccessEnabled                      bool                       `json:"tenantAccessEnabled"`
@@ -402,6 +403,10 @@ func requireSingleDocument(raw []byte, path string) error {
 func (c *Config) Validate() error {
 	if strings.TrimSpace(c.MetricsListenAddress) == "" {
 		return errors.New("metricsListenAddress must not be empty")
+	}
+
+	if c.BootstrapControllersEnabled && c.BootstrapAuthorizationMaxSubjects <= 0 {
+		return errors.New("bootstrapAuthorizationMaxSubjects must be greater than 0 when bootstrap controllers are enabled")
 	}
 
 	if err := c.OIDC.validate(); err != nil {
