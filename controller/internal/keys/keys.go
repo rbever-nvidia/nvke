@@ -164,6 +164,7 @@ const (
 	BootstrapIdentityResolver                 Key = "bootstrap-identity-resolver"
 	BootstrapIdentitySpireWorkloadEntryConfig Key = "bootstrap-identity-spire-workload-entry-config"
 	SyncBootstrapAuthorization                Key = "sync-bootstrap-authorization"
+	ApproveKubeletClientCSR                   Key = "approve-kubelet-client-csr"
 
 	// NodeMachineHealthIssue is the health-issue annotation on a Kubernetes
 	// Node.
@@ -183,6 +184,7 @@ const (
 	MachineHealthIssue             Key = "machine-health-issue"
 	MachineSpireAgentSpiffeIDPath  Key = "spire-agent-spiffe-id-path"
 	MachineBootstrapIdentity       Key = "bootstrap-identity"
+	MachineExpectedNodeName        Key = "expected-node-name"
 
 	// Taints.
 	MaintenanceTaint  Key = "maintenance"

@@ -20,6 +20,9 @@ import (
 	"go.uber.org/automaxprocs/maxprocs"
 	"golang.org/x/sync/errgroup"
 	kubeadmv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/controllers/clustercache"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 	enginev1 "github.com/dsx-ai-factory/nvke/management-engine/apis/v1"
@@ -27,6 +30,7 @@ import (
 	"github.com/dsx-ai-factory/nvke/auth/authn"
 
 	"github.com/dsx-ai-factory/nvke/controller/internal/agent"
+	nvkecapi "github.com/dsx-ai-factory/nvke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nvke/controller/internal/config"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllerconfig"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/automode"
@@ -411,6 +415,19 @@ func main() {
 			os.Exit(1)
 		}
 
+		clusterCache, err := clustercache.SetupWithManager(ctx, k8sControllerManager, clustercache.Options{
+			SecretClient: k8sControllerManager.GetClient(),
+			Client:       clustercache.ClientOptions{UserAgent: "nvke-controller"},
+			Cache:        clustercache.CacheOptions{Indexes: bootstrap.KubeletClientCSRCacheIndexes()},
+			ClusterFilter: func(cluster *clusterv1.Cluster) bool {
+				return nvkecapi.IsNVKEManagedCluster(cluster, cfg.ManagedByLabelValue)
+			},
+		}, controller.Options{})
+		if err != nil {
+			logger.Error("Failed to set up cluster cache", "error", err)
+			os.Exit(1)
+		}
+
 		if cfg.SpiffeEnabled && cfg.NicoControllersEnabled {
 			spireNicoTPMBootstrapIdentityController := bootstrap.NewSpireNicoTPMBootstrapIdentityController(
 				cfg,
@@ -434,6 +451,16 @@ func main() {
 		)
 		if err := bootstrapAuthorizationController.SetupWithManager(k8sControllerManager); err != nil {
 			logger.Error("Failed to set up bootstrap authorization controller", "error", err)
+			os.Exit(1)
+		}
+
+		kubeletClientCSRController := bootstrap.NewKubeletClientCSRController(
+			k8sControllerManager.GetClient(),
+			clusterCache,
+			logger.With("logger", "kubelet-client-csr-controller"),
+		)
+		if err := kubeletClientCSRController.SetupWithManager(k8sControllerManager); err != nil {
+			logger.Error("Failed to set up kubelet client CSR controller", "error", err)
 			os.Exit(1)
 		}
 	} else {

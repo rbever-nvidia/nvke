@@ -387,3 +387,40 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	scheme.AddKnownTypeWithName(nicov1.GroupVersion.WithKind(testNicoClusterKind+"List"), &unstructured.UnstructuredList{})
 	return scheme
 }
+
+func TestIsNVKEManagedCluster(t *testing.T) {
+	const managedBy = "nvke-controller"
+
+	tests := []struct {
+		name            string
+		clusterLabels   map[string]string
+		configuredValue string
+		want            bool
+	}{
+		{
+			name:            "matching label is managed",
+			clusterLabels:   map[string]string{keys.ManagedBy.String(): managedBy},
+			configuredValue: managedBy,
+			want:            true,
+		},
+		{
+			name:            "empty configured value does not match an unlabeled cluster",
+			clusterLabels:   nil,
+			configuredValue: "",
+			want:            false,
+		},
+		{
+			name:            "empty configured value does not match an empty label",
+			clusterLabels:   map[string]string{keys.ManagedBy.String(): ""},
+			configuredValue: "",
+			want:            false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Labels: tt.clusterLabels}}
+			require.Equal(t, tt.want, capi.IsNVKEManagedCluster(cluster, tt.configuredValue))
+		})
+	}
+}

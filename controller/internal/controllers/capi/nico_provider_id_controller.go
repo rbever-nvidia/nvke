@@ -19,6 +19,7 @@ import (
 
 	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 
+	nvkecapi "github.com/dsx-ai-factory/nvke/controller/internal/capi"
 	"github.com/dsx-ai-factory/nvke/controller/internal/keys"
 	"github.com/dsx-ai-factory/nvke/controller/internal/kube"
 )
@@ -115,7 +116,7 @@ func (c *NicoProviderIDController) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, fmt.Errorf("failed to get CAPI cluster: %w", err)
 	}
-	if !isNVKEManagedCluster(cluster, c.managedByLabelValue) {
+	if !nvkecapi.IsNVKEManagedCluster(cluster, c.managedByLabelValue) {
 		logger.Debug("CAPI Cluster is not managed by NVKE, skipping provider ID reconciliation", "clusterName", cluster.Name)
 		return ctrl.Result{}, nil
 	}
@@ -161,18 +162,6 @@ func (c *NicoProviderIDController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	logger.Info("Patched tenant Node metadata", "nodeName", node.Name, "providerID", node.Spec.ProviderID)
 	return ctrl.Result{}, nil
-}
-
-// isNVKEManagedCluster reports whether NVKE created the CAPI Cluster, which it
-// marks with the managed-by label in either label domain. An empty configured
-// value matches nothing, so a misconfiguration cannot make an unlabeled Cluster
-// look NVKE-managed.
-func isNVKEManagedCluster(cluster *clusterv1.Cluster, managedByLabelValue string) bool {
-	if managedByLabelValue == "" {
-		return false
-	}
-	value, ok := keys.ManagedBy.Get(cluster.Labels)
-	return ok && value == managedByLabelValue
 }
 
 func reconcileNodeMetadata(node *corev1.Node, nicoMachine *nicov1.NicoMachine) bool {

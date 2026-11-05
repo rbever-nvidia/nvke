@@ -136,3 +136,15 @@ func IsKubeadmConfigRef(ref clusterv1.ContractVersionedObjectReference) bool {
 func IsNicoMachineRef(ref clusterv1.ContractVersionedObjectReference) bool {
 	return ref.Name != "" && ref.GroupKind() == nicov1.GroupVersion.WithKind("NicoMachine").GroupKind()
 }
+
+// IsNVKEManagedCluster reports whether NVKE created the CAPI Cluster, which it
+// marks with the managed-by label in either label domain. An empty configured
+// value matches nothing, so a misconfiguration cannot make an unlabeled Cluster
+// look NVKE-managed.
+func IsNVKEManagedCluster(cluster *clusterv1.Cluster, managedByLabelValue string) bool {
+	if managedByLabelValue == "" {
+		return false
+	}
+	value, ok := keys.ManagedBy.Get(cluster.Labels)
+	return ok && value == managedByLabelValue
+}
