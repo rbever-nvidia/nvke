@@ -7,12 +7,13 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/dsx-ai-factory/nvke/controller/internal/constants"
 	"github.com/dsx-ai-factory/nvke/controller/internal/keys"
 )
 
@@ -36,25 +37,10 @@ const (
 	KubeletClientCSRApprovalReason = "NVKEValidatedBootstrapIdentity"
 )
 
-func setKubeletClientCertificateCondition(
-	ctx context.Context,
-	k8sClient client.Client,
-	machine *clusterv1.Machine,
-	status metav1.ConditionStatus,
-	reason string,
-	message string,
-) error {
-	return setMachineCondition(
-		ctx,
-		k8sClient,
-		machine,
-		KubeletClientCertificateIssuedCondition,
-		status,
-		reason,
-		message,
-		constants.FieldManagerKubeletClientCSR,
-	)
-}
+const (
+	// KubeletCSRApprovedReason is the Event reason when a kubelet CSR is approved.
+	KubeletCSRApprovedReason = "KubeletCSRApproved"
+)
 
 func setMachineCondition(
 	ctx context.Context,
@@ -65,6 +51,7 @@ func setMachineCondition(
 	reason string,
 	message string,
 	fieldOwner string,
+	recorder record.EventRecorder,
 ) error {
 	conditions := []metav1.Condition{}
 	if current := meta.FindStatusCondition(machine.Status.Conditions, conditionType); current != nil {
@@ -104,6 +91,17 @@ func setMachineCondition(
 	); err != nil {
 		return fmt.Errorf("failed to patch Machine %s condition: %w", conditionType, err)
 	}
-
+	recordConditionEvent(recorder, machine, status, reason, message)
 	return nil
+}
+
+func recordConditionEvent(recorder record.EventRecorder, machine *clusterv1.Machine, status metav1.ConditionStatus, reason, message string) {
+	if recorder == nil {
+		return
+	}
+	eventType := corev1.EventTypeNormal
+	if status != metav1.ConditionTrue {
+		eventType = corev1.EventTypeWarning
+	}
+	recorder.Event(machine, eventType, reason, message)
 }

@@ -17,6 +17,7 @@ import (
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -264,7 +265,14 @@ func clientCSRConditionTrue(csr *certificatesv1.CertificateSigningRequest, condi
 	return false
 }
 
-func approveKubeletClientCSRs(ctx context.Context, tenantClient client.Client, machine *clusterv1.Machine, csrs []*certificatesv1.CertificateSigningRequest, logger *slog.Logger) error {
+func approveKubeletClientCSRs(
+	ctx context.Context,
+	tenantClient client.Client,
+	machine *clusterv1.Machine,
+	csrs []*certificatesv1.CertificateSigningRequest,
+	logger *slog.Logger,
+	recorder record.EventRecorder,
+) error {
 	slices.SortFunc(csrs, func(left, right *certificatesv1.CertificateSigningRequest) int {
 		return strings.Compare(left.Name, right.Name)
 	})
@@ -274,6 +282,9 @@ func approveKubeletClientCSRs(ctx context.Context, tenantClient client.Client, m
 		}
 		if err := approveKubeletClientCSR(ctx, tenantClient, csr); err != nil {
 			return err
+		}
+		if recorder != nil {
+			recorder.Event(machine, corev1.EventTypeNormal, KubeletCSRApprovedReason, "Approved kubelet CSR "+csr.Name)
 		}
 		logger.Info("Approved kubelet client CSR",
 			"namespace", machine.Namespace,
